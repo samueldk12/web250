@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Sistema de Reconhecimento Facial</h1>
+            <p class="subtitle">Multi-Model Face Recognition with Ensemble Support</p>
+        </header>
+
+        <main>
+            <div class="panels">
+                <!-- Register Panel -->
+                <section class="panel" id="register-panel">
+                    <h2>Registrar Face</h2>
+                    <form id="register-form">
+                        <div class="form-group">
+                            <label for="name">Nome</label>
+                            <input type="text" id="name" name="name" required placeholder="Digite o nome">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Modelos para Registro</label>
+                            <div class="model-selector" id="register-models">
+                                <p class="loading-text">Carregando modelos...</p>
+                            </div>
+                        </div>
+
+                        <div class="upload-area" id="register-upload">
+                            <div class="upload-content">
+                                <div class="upload-icon">+</div>
+                                <p>Arraste uma imagem ou clique para selecionar</p>
+                            </div>
+                            <input type="file" id="register-file" accept="image/*" hidden>
+                            <img id="register-preview" class="preview-image" hidden>
+                        </div>
+                        <button type="submit" class="btn btn-primary" id="register-btn">
+                            <span class="btn-text">Registrar</span>
+                            <span class="btn-loading" hidden>Processando...</span>
+                        </button>
+                    </form>
+                    <div id="register-result" class="result-message"></div>
+                </section>
+
+                <!-- Recognize Panel -->
+                <section class="panel" id="recognize-panel">
+                    <h2>Reconhecer Face</h2>
+                    <form id="recognize-form">
+                        <div class="form-group">
+                            <label>Modelos para Reconhecimento</label>
+                            <div class="model-selector" id="recognize-models">
+                                <p class="loading-text">Carregando modelos...</p>
+                            </div>
+                        </div>
+
+                        <div class="form-group" id="ensemble-group" hidden>
+                            <label for="ensemble-method">Metodo de Ensemble</label>
+                            <select id="ensemble-method" class="form-select">
+                                <option value="average">Media</option>
+                                <option value="weighted">Media Ponderada</option>
+                                <option value="voting">Votacao</option>
+                                <option value="min">Minimo (mais confiante)</option>
+                                <option value="max">Maximo (conservador)</option>
+                            </select>
+                            <p class="help-text">Selecione como combinar os resultados dos modelos</p>
+                        </div>
+
+                        <div class="upload-area" id="recognize-upload">
+                            <div class="upload-content">
+                                <div class="upload-icon">+</div>
+                                <p>Arraste uma imagem ou clique para selecionar</p>
+                            </div>
+                            <input type="file" id="recognize-file" accept="image/*" hidden>
+                            <img id="recognize-preview" class="preview-image" hidden>
+                        </div>
+                        <button type="submit" class="btn btn-secondary" id="recognize-btn">
+                            <span class="btn-text">Reconhecer</span>
+                            <span class="btn-loading" hidden>Processando...</span>
+                        </button>
+                    </form>
+                    <div id="recognize-result" class="result-message"></div>
+                    <div id="matches-container" class="matches-container" hidden>
+                        <h3>Resultados</h3>
+                        <div id="recognize-info" class="recognize-info"></div>
+                        <div id="matches-list" class="matches-list"></div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Registered Faces -->
+            <section class="panel faces-panel" id="faces-panel">
+                <h2>Faces Registradas</h2>
+                <div id="faces-list" class="faces-grid">
+                    <p class="empty-message">Nenhuma face registrada</p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Face Recognition System - Multi-Model Support (ArcFace, FaceNet, VGG-Face, InsightFace, and more)</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

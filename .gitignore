@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+
+# Model caches
+backend/models_cache/
+.deepface/
+.insightface/
+
+# Data
+data/faces/*
+data/embeddings.json
+!data/.gitkeep
+!data/faces/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log

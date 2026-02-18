@@ -1,0 +1,24 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+python-multipart==0.0.6
+
+# TensorFlow 2.16 with tf-keras for backward compatibility
+tensorflow==2.16.1
+tf-keras==2.16.0
+
+# DeepFace - latest version
+deepface
+
+# InsightFace and dependencies
+insightface==0.7.3
+onnxruntime==1.17.0
+
+# Common dependencies
+opencv-python-headless==4.9.0.80
+numpy>=1.23.0,<2.0.0
+Pillow>=10.0.0
+pydantic>=2.0.0
+scipy>=1.10.0
+
+# Fix ml_dtypes compatibility
+ml_dtypes==0.3.2
