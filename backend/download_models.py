@@ -73,6 +73,29 @@ def download_insightface_models():
         print(f"[-] Error downloading InsightFace: {e}")
 
 
+def print_upscaling_info():
+    """Print information about optional upscaling model."""
+    print("\n" + "=" * 60)
+    print("Optional: Image Upscaling Model (Real-ESRGAN)")
+    print("=" * 60)
+    print("""
+To enable high-quality image upscaling for small faces, download Real-ESRGAN:
+
+1. Create directory:
+   mkdir -p /app/.esrgan/models
+
+2. Download the model:
+   wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth \\
+        -O /app/.esrgan/models/RealESRGAN_x4plus.pth
+
+3. Install dependencies (add to requirements.txt):
+   basicsr>=1.4.2
+   realesrgan>=0.3.0
+
+Without Real-ESRGAN, the system will use OpenCV's LANCZOS4 upscaling (still effective).
+""")
+
+
 def main():
     print("=" * 60)
     print("Face Recognition Models Downloader")
@@ -81,10 +104,14 @@ def main():
     # Create directories
     os.makedirs("/app/.deepface/weights", exist_ok=True)
     os.makedirs("/app/.insightface/models", exist_ok=True)
+    os.makedirs("/app/.esrgan/models", exist_ok=True)
 
     # Download models
     download_deepface_models()
     download_insightface_models()
+
+    # Print upscaling info
+    print_upscaling_info()
 
     print("\n" + "=" * 60)
     print("Download complete!")

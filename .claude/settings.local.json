@@ -3,7 +3,10 @@
     "allow": [
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(docker:*)"
+      "Bash(docker:*)",
+      "Bash(curl:*)",
+      "Bash(dir:*)",
+      "Bash(python:*)"
     ]
   }
 }

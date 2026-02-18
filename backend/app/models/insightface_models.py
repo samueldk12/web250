@@ -4,7 +4,7 @@ from typing import List, Optional
 import numpy as np
 import cv2
 
-from app.models.base import FaceRecognitionModel
+from app.models.base import FaceRecognitionModel, FaceData
 from app.models.registry import ModelRegistry
 
 # InsightFace imports - optional
@@ -73,6 +73,43 @@ class InsightFaceModelBase(FaceRecognitionModel):
         except Exception as e:
             print(f"Error extracting embedding with InsightFace: {e}")
             return None
+
+    def get_all_embeddings(self, image_path: str) -> List[FaceData]:
+        """Extract embeddings for ALL faces in image using InsightFace."""
+        if not INSIGHTFACE_AVAILABLE:
+            return []
+
+        app = self._get_app()
+        if app is None:
+            return []
+
+        try:
+            img = cv2.imread(image_path)
+            if img is None:
+                return []
+
+            faces = app.get(img)
+            result = []
+            for i, face in enumerate(faces):
+                embedding = face.embedding
+                # Normalize embedding
+                embedding = embedding / np.linalg.norm(embedding)
+                bbox = (
+                    int(face.bbox[0]),
+                    int(face.bbox[1]),
+                    int(face.bbox[2] - face.bbox[0]),
+                    int(face.bbox[3] - face.bbox[1])
+                )
+                result.append(FaceData(
+                    embedding=embedding.tolist(),
+                    bbox=bbox,
+                    confidence=float(face.det_score) if hasattr(face, 'det_score') else 1.0,
+                    face_index=i
+                ))
+            return result
+        except Exception as e:
+            print(f"Error extracting embeddings with InsightFace: {e}")
+            return []
 
     def compare(self, embedding1: List[float], embedding2: List[float]) -> float:
         """Compare two embeddings using cosine distance."""

@@ -13,8 +13,14 @@ const registerFile = document.getElementById('register-file');
 const recognizeFile = document.getElementById('recognize-file');
 const registerPreview = document.getElementById('register-preview');
 const recognizePreview = document.getElementById('recognize-preview');
+const registerZipInfo = document.getElementById('register-zip-info');
+const recognizeZipInfo = document.getElementById('recognize-zip-info');
+const registerZipName = document.getElementById('register-zip-name');
+const recognizeZipName = document.getElementById('recognize-zip-name');
 const registerResult = document.getElementById('register-result');
 const recognizeResult = document.getElementById('recognize-result');
+const registerBulkResults = document.getElementById('register-bulk-results');
+const bulkRecognizeResults = document.getElementById('bulk-recognize-results');
 const matchesContainer = document.getElementById('matches-container');
 const matchesList = document.getElementById('matches-list');
 const recognizeInfo = document.getElementById('recognize-info');
@@ -25,14 +31,22 @@ const registerModelsContainer = document.getElementById('register-models');
 const recognizeModelsContainer = document.getElementById('recognize-models');
 const ensembleGroup = document.getElementById('ensemble-group');
 const ensembleMethod = document.getElementById('ensemble-method');
+const nameGroup = document.getElementById('name-group');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    setupUploadArea(registerUpload, registerFile, registerPreview);
-    setupUploadArea(recognizeUpload, recognizeFile, recognizePreview);
+    setupUploadArea(registerUpload, registerFile, registerPreview, registerZipInfo, registerZipName);
+    setupUploadArea(recognizeUpload, recognizeFile, recognizePreview, recognizeZipInfo, recognizeZipName);
     loadModels();
     loadFaces();
 });
+
+// Check if file is a ZIP
+function isZipFile(file) {
+    return file.name.toLowerCase().endsWith('.zip') ||
+           file.type === 'application/zip' ||
+           file.type === 'application/x-zip-compressed';
+}
 
 // Load available models
 async function loadModels() {
@@ -49,33 +63,43 @@ async function loadModels() {
 
 // Render model checkboxes
 function renderModelSelectors() {
+    // For registration: select ALL available models by default
     const registerHtml = availableModels.map((model, i) => `
         <input type="checkbox" id="reg-model-${model.name}"
                class="model-checkbox"
                name="register-models"
                value="${model.name}"
-               ${model.name === 'ArcFace' ? 'checked' : ''}>
-        <label for="reg-model-${model.name}" class="model-label" title="${model.description}">
+               ${model.available ? 'checked' : 'disabled'}>
+        <label for="reg-model-${model.name}" class="model-label ${!model.available ? 'model-unavailable' : ''}" title="${model.description}${!model.available ? ' (Indisponivel)' : ''}">
             ${model.display_name}
             <span class="model-badge">${model.embedding_size}d</span>
+            ${!model.available ? '<span class="model-status-unavailable">X</span>' : ''}
         </label>
     `).join('');
 
+    // For recognition: only ArcFace by default (user can select more)
     const recognizeHtml = availableModels.map((model, i) => `
         <input type="checkbox" id="rec-model-${model.name}"
                class="model-checkbox"
                name="recognize-models"
                value="${model.name}"
-               ${model.name === 'ArcFace' ? 'checked' : ''}
+               ${model.available && model.name === 'ArcFace' ? 'checked' : ''}
+               ${!model.available ? 'disabled' : ''}
                onchange="updateEnsembleVisibility()">
-        <label for="rec-model-${model.name}" class="model-label" title="${model.description}">
+        <label for="rec-model-${model.name}" class="model-label ${!model.available ? 'model-unavailable' : ''}" title="${model.description}${!model.available ? ' (Indisponivel)' : ''}">
             ${model.display_name}
             <span class="model-badge">${model.embedding_size}d</span>
+            ${!model.available ? '<span class="model-status-unavailable">X</span>' : ''}
         </label>
     `).join('');
 
     registerModelsContainer.innerHTML = registerHtml;
     recognizeModelsContainer.innerHTML = recognizeHtml;
+
+    // Show count of available models
+    const availableCount = availableModels.filter(m => m.available).length;
+    const totalCount = availableModels.length;
+    console.log(`Models loaded: ${availableCount}/${totalCount} available`);
 }
 
 // Update ensemble method visibility based on selected models
@@ -91,7 +115,7 @@ function getSelectedModels(name) {
 }
 
 // Setup upload area with drag & drop
-function setupUploadArea(uploadArea, fileInput, preview) {
+function setupUploadArea(uploadArea, fileInput, preview, zipInfo, zipName) {
     const uploadContent = uploadArea.querySelector('.upload-content');
 
     uploadArea.addEventListener('click', () => fileInput.click());
@@ -111,35 +135,61 @@ function setupUploadArea(uploadArea, fileInput, preview) {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             fileInput.files = files;
-            showPreview(files[0], preview, uploadContent);
+            showFilePreview(files[0], preview, uploadContent, zipInfo, zipName);
+            updateNameFieldVisibility(fileInput);
         }
     });
 
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-            showPreview(e.target.files[0], preview, uploadContent);
+            showFilePreview(e.target.files[0], preview, uploadContent, zipInfo, zipName);
+            updateNameFieldVisibility(fileInput);
         }
     });
 }
 
-// Show image preview
-function showPreview(file, preview, uploadContent) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        preview.src = e.target.result;
-        preview.hidden = false;
+// Show file preview (image or ZIP info)
+function showFilePreview(file, preview, uploadContent, zipInfo, zipName) {
+    if (isZipFile(file)) {
+        // Show ZIP info
+        preview.hidden = true;
+        zipInfo.hidden = false;
+        zipName.textContent = file.name;
         uploadContent.style.display = 'none';
-    };
-    reader.readAsDataURL(file);
+    } else {
+        // Show image preview
+        zipInfo.hidden = true;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            preview.src = e.target.result;
+            preview.hidden = false;
+            uploadContent.style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
+// Update name field visibility based on file type
+function updateNameFieldVisibility(fileInput) {
+    if (fileInput === registerFile && nameGroup) {
+        const file = fileInput.files[0];
+        if (file && isZipFile(file)) {
+            nameGroup.style.display = 'none';
+        } else {
+            nameGroup.style.display = 'block';
+        }
+    }
 }
 
 // Reset upload area
-function resetUpload(uploadArea, fileInput, preview) {
+function resetUpload(uploadArea, fileInput, preview, zipInfo) {
     const uploadContent = uploadArea.querySelector('.upload-content');
     fileInput.value = '';
     preview.src = '';
     preview.hidden = true;
+    if (zipInfo) zipInfo.hidden = true;
     uploadContent.style.display = 'block';
+    if (nameGroup) nameGroup.style.display = 'block';
 }
 
 // Show result message
@@ -163,22 +213,18 @@ function setLoading(btn, loading) {
     btnLoading.hidden = !loading;
 }
 
-// Register face
+// Register face(s)
 registerForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearResult(registerResult);
+    registerBulkResults.hidden = true;
 
     const name = document.getElementById('name').value.trim();
     const file = registerFile.files[0];
     const selectedModels = getSelectedModels('register-models');
 
-    if (!name) {
-        showResult(registerResult, 'Por favor, insira um nome.', true);
-        return;
-    }
-
     if (!file) {
-        showResult(registerResult, 'Por favor, selecione uma imagem.', true);
+        showResult(registerResult, 'Por favor, selecione uma imagem ou arquivo ZIP.', true);
         return;
     }
 
@@ -187,6 +233,21 @@ registerForm.addEventListener('submit', async (e) => {
         return;
     }
 
+    // Check if it's a ZIP file
+    if (isZipFile(file)) {
+        await registerFromZip(file, selectedModels);
+    } else {
+        // Single image registration
+        if (!name) {
+            showResult(registerResult, 'Por favor, insira um nome para a imagem.', true);
+            return;
+        }
+        await registerSingleImage(name, file, selectedModels);
+    }
+});
+
+// Register single image
+async function registerSingleImage(name, file, selectedModels) {
     setLoading(registerBtn, true);
 
     const formData = new FormData();
@@ -206,7 +267,7 @@ registerForm.addEventListener('submit', async (e) => {
             const modelsUsed = data.models_used.join(', ');
             showResult(registerResult, `${data.message} (Modelos: ${modelsUsed})`);
             document.getElementById('name').value = '';
-            resetUpload(registerUpload, registerFile, registerPreview);
+            resetUpload(registerUpload, registerFile, registerPreview, registerZipInfo);
             loadFaces();
         } else {
             showResult(registerResult, data.detail || data.message || 'Erro ao registrar face.', true);
@@ -217,20 +278,109 @@ registerForm.addEventListener('submit', async (e) => {
     } finally {
         setLoading(registerBtn, false);
     }
-});
+}
 
-// Recognize face
+// Register from ZIP file
+async function registerFromZip(file, selectedModels) {
+    setLoading(registerBtn, true);
+
+    const formData = new FormData();
+    formData.append('zipfile_upload', file);
+    formData.append('models', selectedModels.join(','));
+
+    try {
+        const response = await fetch(`${API_BASE}/faces/register-zip`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showResult(registerResult, data.message);
+            displayBulkRegisterResults(data);
+            resetUpload(registerUpload, registerFile, registerPreview, registerZipInfo);
+            loadFaces();
+        } else {
+            showResult(registerResult, data.detail || 'Erro ao processar arquivo ZIP.', true);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showResult(registerResult, 'Erro de conexao com o servidor.', true);
+    } finally {
+        setLoading(registerBtn, false);
+    }
+}
+
+// Display bulk register results
+function displayBulkRegisterResults(data) {
+    registerBulkResults.hidden = false;
+
+    let html = `
+        <h4>Resultado do Registro em Lote</h4>
+        <div class="bulk-summary">
+            <div class="bulk-summary-item">
+                <span>Total de Pessoas:</span>
+                <span>${data.total_persons}</span>
+            </div>
+            <div class="bulk-summary-item">
+                <span>Total de Imagens:</span>
+                <span>${data.total_images}</span>
+            </div>
+            <div class="bulk-summary-item success">
+                <span>Registros com Sucesso:</span>
+                <span>${data.successful_registrations}</span>
+            </div>
+            <div class="bulk-summary-item error">
+                <span>Falhas:</span>
+                <span>${data.failed_registrations}</span>
+            </div>
+            <div class="bulk-summary-item">
+                <span>Modelos:</span>
+                <span>${data.models_used.join(', ')}</span>
+            </div>
+        </div>
+    `;
+
+    if (data.results && data.results.length > 0) {
+        html += '<div class="bulk-items">';
+        data.results.forEach(result => {
+            const statusClass = result.images_failed === 0 ? 'success' :
+                               (result.images_success === 0 ? 'error' : 'partial');
+            const statusText = result.images_failed === 0 ? 'OK' :
+                              (result.images_success === 0 ? 'Falha' : 'Parcial');
+
+            html += `
+                <div class="bulk-item">
+                    <div class="bulk-item-header">
+                        <span class="bulk-item-name">${escapeHtml(result.name)}</span>
+                        <span class="bulk-item-status ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="bulk-item-details">
+                        ${result.images_success}/${result.images_processed} imagens registradas
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+
+    registerBulkResults.innerHTML = html;
+}
+
+// Recognize face(s)
 recognizeForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearResult(recognizeResult);
     matchesContainer.hidden = true;
+    bulkRecognizeResults.hidden = true;
 
     const file = recognizeFile.files[0];
     const selectedModels = getSelectedModels('recognize-models');
     const ensembleMethodValue = ensembleMethod.value;
 
     if (!file) {
-        showResult(recognizeResult, 'Por favor, selecione uma imagem.', true);
+        showResult(recognizeResult, 'Por favor, selecione uma imagem ou arquivo ZIP.', true);
         return;
     }
 
@@ -239,6 +389,16 @@ recognizeForm.addEventListener('submit', async (e) => {
         return;
     }
 
+    // Check if it's a ZIP file
+    if (isZipFile(file)) {
+        await recognizeFromZip(file, selectedModels, ensembleMethodValue);
+    } else {
+        await recognizeSingleImage(file, selectedModels, ensembleMethodValue);
+    }
+});
+
+// Recognize single image
+async function recognizeSingleImage(file, selectedModels, ensembleMethodValue) {
     setLoading(recognizeBtn, true);
 
     const formData = new FormData();
@@ -255,7 +415,12 @@ recognizeForm.addEventListener('submit', async (e) => {
         const data = await response.json();
 
         if (response.ok) {
-            if (data.matches && data.matches.length > 0) {
+            // Check for multi-face response
+            if (data.faces && data.faces.length > 0) {
+                showResult(recognizeResult, data.message);
+                displayMultiFaceMatches(data.faces, data.models_used, data.ensemble_method, data.faces_detected);
+            } else if (data.matches && data.matches.length > 0) {
+                // Fallback for single face (backward compatibility)
                 showResult(recognizeResult, data.message);
                 displayMatches(data.matches, data.models_used, data.ensemble_method);
             } else {
@@ -270,9 +435,203 @@ recognizeForm.addEventListener('submit', async (e) => {
     } finally {
         setLoading(recognizeBtn, false);
     }
-});
+}
 
-// Display matches
+// Recognize from ZIP file
+async function recognizeFromZip(file, selectedModels, ensembleMethodValue) {
+    setLoading(recognizeBtn, true);
+
+    const formData = new FormData();
+    formData.append('zipfile_upload', file);
+    formData.append('models', selectedModels.join(','));
+    formData.append('ensemble_method', ensembleMethodValue);
+
+    try {
+        const response = await fetch(`${API_BASE}/faces/recognize-zip`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showResult(recognizeResult, data.message);
+            displayBulkRecognizeResults(data);
+        } else {
+            showResult(recognizeResult, data.detail || 'Erro ao processar arquivo ZIP.', true);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showResult(recognizeResult, 'Erro de conexao com o servidor.', true);
+    } finally {
+        setLoading(recognizeBtn, false);
+    }
+}
+
+// Display bulk recognize results (with multi-face support)
+function displayBulkRecognizeResults(data) {
+    bulkRecognizeResults.hidden = false;
+
+    // Count statistics
+    const totalFaces = data.results.reduce((sum, r) => sum + (r.faces_detected || 0), 0);
+    const totalMatches = data.results.reduce((sum, r) => {
+        if (r.faces) {
+            return sum + r.faces.reduce((fSum, f) => fSum + (f.matches ? f.matches.length : 0), 0);
+        }
+        return sum;
+    }, 0);
+    const withoutFace = data.results.filter(r => !r.success).length;
+
+    let html = `
+        <h4>Resultado do Reconhecimento em Lote</h4>
+        <div class="bulk-summary">
+            <div class="bulk-summary-item">
+                <span>Imagens Processadas:</span>
+                <span>${data.processed_images}</span>
+            </div>
+            <div class="bulk-summary-item">
+                <span>Total de Faces Detectadas:</span>
+                <span>${totalFaces}</span>
+            </div>
+            <div class="bulk-summary-item success">
+                <span>Total de Correspondencias:</span>
+                <span>${totalMatches}</span>
+            </div>
+            <div class="bulk-summary-item error">
+                <span>Imagens Sem Face:</span>
+                <span>${withoutFace}</span>
+            </div>
+            <div class="bulk-summary-item">
+                <span>Modelos:</span>
+                <span>${data.models_used.join(', ')}</span>
+            </div>
+            ${data.ensemble_method ? `
+            <div class="bulk-summary-item">
+                <span>Ensemble:</span>
+                <span>${data.ensemble_method}</span>
+            </div>
+            ` : ''}
+        </div>
+    `;
+
+    if (data.results && data.results.length > 0) {
+        html += '<div class="bulk-items">';
+        data.results.forEach(result => {
+            const facesDetected = result.faces_detected || 0;
+            const faceMatches = result.faces ? result.faces.reduce((sum, f) => sum + (f.matches ? f.matches.length : 0), 0) : 0;
+            const statusClass = !result.success ? 'error' : (faceMatches > 0 ? 'success' : 'partial');
+            const statusText = !result.success ? 'Sem Face' : `${facesDetected} Face(s), ${faceMatches} Match(es)`;
+
+            html += `
+                <div class="bulk-item">
+                    <div class="bulk-item-header">
+                        <span class="bulk-item-name">${escapeHtml(result.filename)}</span>
+                        <span class="bulk-item-status ${statusClass}">${statusText}</span>
+                    </div>
+            `;
+
+            // Display faces with matches
+            if (result.faces && result.faces.length > 0) {
+                result.faces.forEach((face, faceIdx) => {
+                    if (face.matches && face.matches.length > 0) {
+                        html += `<div class="bulk-item-face">`;
+                        html += `<div class="face-label">Face ${face.face_index + 1}${face.bbox ? ` (${face.bbox[0]},${face.bbox[1]})` : ''}:</div>`;
+                        html += '<div class="bulk-item-matches">';
+                        face.matches.forEach(match => {
+                            const confidence = Math.round(match.confidence * 100);
+                            html += `
+                                <div class="bulk-match">
+                                    <span class="bulk-match-name">${escapeHtml(match.name)}</span>
+                                    <span class="bulk-match-confidence">${confidence}%</span>
+                                </div>
+                            `;
+                        });
+                        html += '</div></div>';
+                    } else {
+                        html += `<div class="bulk-item-face">`;
+                        html += `<div class="face-label">Face ${face.face_index + 1}: <span class="no-match">Sem correspondencia</span></div>`;
+                        html += '</div>';
+                    }
+                });
+            }
+
+            html += '</div>';
+        });
+        html += '</div>';
+    }
+
+    bulkRecognizeResults.innerHTML = html;
+}
+
+// Display matches for multiple faces in single image
+function displayMultiFaceMatches(faces, modelsUsed, ensembleMethodUsed, facesDetected) {
+    matchesList.innerHTML = '';
+    matchesContainer.hidden = false;
+
+    // Show info about models used and faces detected
+    let infoHtml = `<strong>Faces Detectadas:</strong> ${facesDetected} | <strong>Modelos:</strong> ${modelsUsed.join(', ')}`;
+    if (ensembleMethodUsed) {
+        const methodLabels = {
+            'average': 'Media',
+            'weighted': 'Media Ponderada',
+            'voting': 'Votacao',
+            'min': 'Minimo',
+            'max': 'Maximo'
+        };
+        infoHtml += ` | <strong>Ensemble:</strong> ${methodLabels[ensembleMethodUsed] || ensembleMethodUsed}`;
+    }
+    recognizeInfo.innerHTML = infoHtml;
+
+    faces.forEach((face, faceIndex) => {
+        // Create face section
+        const faceSection = document.createElement('div');
+        faceSection.className = 'face-section';
+
+        const faceHeader = document.createElement('div');
+        faceHeader.className = 'face-header';
+        const bboxInfo = face.bbox ? ` (posicao: ${face.bbox[0]}, ${face.bbox[1]})` : '';
+        faceHeader.innerHTML = `<strong>Face ${face.face_index + 1}</strong>${bboxInfo}`;
+        faceSection.appendChild(faceHeader);
+
+        if (face.matches && face.matches.length > 0) {
+            face.matches.forEach(match => {
+                const confidence = Math.round(match.confidence * 100);
+                const matchEl = document.createElement('div');
+                matchEl.className = 'match-item';
+
+                let modelDistancesHtml = '';
+                if (match.model_distances) {
+                    const distances = Object.entries(match.model_distances)
+                        .map(([model, dist]) => `${model}: ${(dist * 100).toFixed(1)}%`)
+                        .join(', ');
+                    modelDistancesHtml = `<div class="match-models">Distancias: ${distances}</div>`;
+                }
+
+                matchEl.innerHTML = `
+                    <img src="${API_BASE}/faces/${match.id}/image" alt="${match.name}" class="match-image">
+                    <div class="match-info">
+                        <div class="match-name">${escapeHtml(match.name)}</div>
+                        <div class="match-confidence">Confianca: ${confidence}%</div>
+                        ${modelDistancesHtml}
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${confidence}%"></div>
+                        </div>
+                    </div>
+                `;
+                faceSection.appendChild(matchEl);
+            });
+        } else {
+            const noMatch = document.createElement('div');
+            noMatch.className = 'no-match-message';
+            noMatch.textContent = 'Sem correspondencia encontrada';
+            faceSection.appendChild(noMatch);
+        }
+
+        matchesList.appendChild(faceSection);
+    });
+}
+
+// Display matches (single image, single face - backward compatibility)
 function displayMatches(matches, modelsUsed, ensembleMethodUsed) {
     matchesList.innerHTML = '';
     matchesContainer.hidden = false;

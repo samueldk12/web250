@@ -5,8 +5,10 @@ WORKDIR /app
 # Set environment variables for model paths and keras compatibility
 ENV DEEPFACE_HOME=/app/.deepface
 ENV INSIGHTFACE_HOME=/app/.insightface
+ENV ESRGAN_MODEL_PATH=/app/.esrgan/models/RealESRGAN_x4plus.pth
 ENV PYTHONUNBUFFERED=1
 ENV TF_USE_LEGACY_KERAS=1
+ENV TF_CPP_MIN_LOG_LEVEL=2
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -28,7 +30,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create model directories
-RUN mkdir -p /app/.deepface/weights /app/.insightface/models /app/data/faces
+RUN mkdir -p /app/.deepface/weights /app/.insightface/models /app/.esrgan/models /app/data/faces
 
 # Copy download script and run it to download models
 COPY download_models.py .

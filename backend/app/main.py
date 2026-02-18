@@ -1,5 +1,7 @@
 import os
 import tempfile
+import zipfile
+import shutil
 from typing import List, Optional
 from pathlib import Path
 
@@ -12,6 +14,9 @@ from app.config import FACES_PATH, DISTANCE_THRESHOLD
 from app.models import ModelRegistry
 from app.services.ensemble import EnsembleService, EnsembleMethod, create_ensemble
 from app.storage.face_db import get_face_db
+
+# Supported image extensions
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 
 
 app = FastAPI(
@@ -36,6 +41,7 @@ class ModelInfo(BaseModel):
     display_name: str
     description: str
     embedding_size: int
+    available: bool = True
 
 
 class FaceResponse(BaseModel):
@@ -55,12 +61,30 @@ class MatchResponse(BaseModel):
     model_distances: Optional[dict] = None
 
 
+class FaceDetection(BaseModel):
+    face_index: int
+    bbox: Optional[List[int]] = None  # [x, y, w, h]
+    matches: List[MatchResponse]
+
+
+class MultiRecognitionResponse(BaseModel):
+    success: bool
+    faces_detected: int
+    faces: List[FaceDetection]
+    message: str
+    models_used: List[str]
+    ensemble_method: Optional[str] = None
+
+
 class RecognitionResponse(BaseModel):
     success: bool
     matches: List[MatchResponse]
     message: str
     models_used: List[str]
     ensemble_method: Optional[str] = None
+    # Multi-face support
+    faces_detected: int = 1
+    faces: Optional[List[FaceDetection]] = None
 
 
 class RegisterResponse(BaseModel):
@@ -68,6 +92,43 @@ class RegisterResponse(BaseModel):
     face: FaceResponse
     message: str
     models_used: List[str]
+
+
+class BulkRegisterResult(BaseModel):
+    name: str
+    images_processed: int
+    images_success: int
+    images_failed: int
+    face_ids: List[str]
+
+
+class BulkRegisterResponse(BaseModel):
+    success: bool
+    total_persons: int
+    total_images: int
+    successful_registrations: int
+    failed_registrations: int
+    results: List[BulkRegisterResult]
+    models_used: List[str]
+    message: str
+
+
+class BulkRecognizeResult(BaseModel):
+    filename: str
+    success: bool
+    faces_detected: int = 0
+    faces: List[FaceDetection] = []
+    message: str
+
+
+class BulkRecognizeResponse(BaseModel):
+    success: bool
+    total_images: int
+    processed_images: int
+    results: List[BulkRecognizeResult]
+    models_used: List[str]
+    ensemble_method: Optional[str] = None
+    message: str
 
 
 # Health check
@@ -191,7 +252,7 @@ async def register_face(
         os.unlink(tmp_path)
 
 
-# Recognize face in image
+# Recognize faces in image (supports multiple faces)
 @app.post("/api/faces/recognize", response_model=RecognitionResponse)
 async def recognize_face(
     image: UploadFile = File(...),
@@ -225,70 +286,388 @@ async def recognize_face(
         tmp_path = tmp.name
 
     try:
-        # Get embeddings from all specified models
-        embeddings = {}
-        for model_name in valid_models:
-            model = ModelRegistry.get(model_name)
-            if model:
-                embedding = model.get_embedding(tmp_path)
-                if embedding:
-                    embeddings[model_name] = embedding
+        # Get ALL face embeddings from the primary model
+        primary_model = ModelRegistry.get(valid_models[0])
+        all_faces = primary_model.get_all_embeddings(tmp_path)
 
-        if not embeddings:
+        if not all_faces:
             return RecognitionResponse(
                 success=False,
                 matches=[],
                 message="No face detected in image",
                 models_used=[],
-                ensemble_method=None
+                ensemble_method=None,
+                faces_detected=0,
+                faces=[]
             )
 
-        # Create ensemble for comparison
-        ensemble = create_ensemble(list(embeddings.keys()), ensemble_method)
-
-        # Find matches
         db = get_face_db()
+        face_detections = []
+        all_matches = []
 
-        if len(embeddings) == 1:
-            # Single model - use simple comparison
-            model_name = list(embeddings.keys())[0]
-            model = ModelRegistry.get(model_name)
-            matches = db.find_matches_single_model(
-                embeddings[model_name],
-                model_name,
-                model.compare,
-                threshold
-            )
+        # Process each detected face
+        for face_data in all_faces:
+            # Get embeddings from all models for this face
+            # For multi-model, we need the specific face region
+            # For simplicity, we use the primary model's embedding
+            embeddings = {valid_models[0]: face_data.embedding}
+
+            # If multiple models, get embeddings from each
+            # Note: This uses the largest face for other models
+            # A more sophisticated approach would crop the face and re-detect
+            if len(valid_models) > 1:
+                for model_name in valid_models[1:]:
+                    model = ModelRegistry.get(model_name)
+                    if model:
+                        # Use get_all_embeddings to try to match face by index
+                        model_faces = model.get_all_embeddings(tmp_path)
+                        if model_faces and len(model_faces) > face_data.face_index:
+                            embeddings[model_name] = model_faces[face_data.face_index].embedding
+                        elif model_faces:
+                            # Fallback to first face
+                            embeddings[model_name] = model_faces[0].embedding
+
+            # Create ensemble for comparison
             used_ensemble = None
-        else:
-            # Multiple models - use ensemble
-            matches = db.find_matches(
-                embeddings,
-                ensemble.compare_embeddings,
-                threshold,
-                list(embeddings.keys())
-            )
-            used_ensemble = ensemble_method
+            if len(embeddings) == 1:
+                model_name = list(embeddings.keys())[0]
+                model = ModelRegistry.get(model_name)
+                matches = db.find_matches_single_model(
+                    embeddings[model_name],
+                    model_name,
+                    model.compare,
+                    threshold
+                )
+            else:
+                ensemble = create_ensemble(list(embeddings.keys()), ensemble_method)
+                matches = db.find_matches(
+                    embeddings,
+                    ensemble.compare_embeddings,
+                    threshold,
+                    list(embeddings.keys())
+                )
+                used_ensemble = ensemble_method
 
-        if matches:
-            return RecognitionResponse(
-                success=True,
-                matches=[MatchResponse(**m) for m in matches],
-                message=f"Found {len(matches)} match(es)",
-                models_used=list(embeddings.keys()),
-                ensemble_method=used_ensemble
+            face_detection = FaceDetection(
+                face_index=face_data.face_index,
+                bbox=list(face_data.bbox) if face_data.bbox else None,
+                matches=[MatchResponse(**m) for m in matches] if matches else []
             )
-        else:
-            return RecognitionResponse(
-                success=True,
-                matches=[],
-                message="No matches found",
-                models_used=list(embeddings.keys()),
-                ensemble_method=used_ensemble
-            )
+            face_detections.append(face_detection)
+            all_matches.extend(matches if matches else [])
+
+        # For backward compatibility, include all matches in flat list
+        total_matches = sum(len(f.matches) for f in face_detections)
+
+        return RecognitionResponse(
+            success=True,
+            matches=[MatchResponse(**m) for m in all_matches] if all_matches else [],
+            message=f"Found {len(all_faces)} face(s), {total_matches} match(es)",
+            models_used=valid_models,
+            ensemble_method=used_ensemble if len(valid_models) > 1 else None,
+            faces_detected=len(all_faces),
+            faces=face_detections
+        )
     finally:
         # Clean up temp file
         os.unlink(tmp_path)
+
+
+# Register faces from ZIP file
+@app.post("/api/faces/register-zip", response_model=BulkRegisterResponse)
+async def register_faces_from_zip(
+    zipfile_upload: UploadFile = File(...),
+    models: str = Form("ArcFace"),
+):
+    """
+    Register faces from a ZIP file.
+    ZIP structure: each folder name is the person's name, containing their face images.
+    """
+    if not zipfile_upload.filename.lower().endswith('.zip'):
+        raise HTTPException(status_code=400, detail="File must be a ZIP archive")
+
+    # Parse model names
+    model_names = [m.strip() for m in models.split(",") if m.strip()]
+    if not model_names:
+        model_names = ["ArcFace"]
+
+    # Validate models
+    valid_models = [m for m in model_names if ModelRegistry.is_registered(m)]
+    if not valid_models:
+        raise HTTPException(status_code=400, detail="No valid models specified")
+
+    # Create temp directory for extraction
+    temp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(temp_dir, "upload.zip")
+
+    try:
+        # Save uploaded ZIP
+        content = await zipfile_upload.read()
+        with open(zip_path, 'wb') as f:
+            f.write(content)
+
+        # Extract ZIP
+        extract_dir = os.path.join(temp_dir, "extracted")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+
+        # Process each folder (person)
+        db = get_face_db()
+        results = []
+        total_images = 0
+        total_success = 0
+        total_failed = 0
+
+        # Walk through extracted directory
+        for root, dirs, files in os.walk(extract_dir):
+            # Get relative path to determine person name
+            rel_path = os.path.relpath(root, extract_dir)
+
+            # Skip root directory
+            if rel_path == '.':
+                # Check if there are image files directly in root (no subfolders)
+                image_files = [f for f in files if Path(f).suffix.lower() in IMAGE_EXTENSIONS]
+                if image_files and not dirs:
+                    # Images directly in ZIP without folders - use filename as name
+                    for img_file in image_files:
+                        total_images += 1
+                        img_path = os.path.join(root, img_file)
+                        person_name = Path(img_file).stem  # Use filename without extension
+
+                        # Get embeddings
+                        embeddings = {}
+                        for model_name in valid_models:
+                            model = ModelRegistry.get(model_name)
+                            if model:
+                                embedding = model.get_embedding(img_path)
+                                if embedding:
+                                    embeddings[model_name] = embedding
+
+                        if embeddings:
+                            face = db.add_face(person_name, embeddings, img_path)
+                            total_success += 1
+                            results.append(BulkRegisterResult(
+                                name=person_name,
+                                images_processed=1,
+                                images_success=1,
+                                images_failed=0,
+                                face_ids=[face["id"]]
+                            ))
+                        else:
+                            total_failed += 1
+                continue
+
+            # Get person name from folder structure (first level folder)
+            path_parts = rel_path.split(os.sep)
+            person_name = path_parts[0]
+
+            # Skip if this isn't the direct subfolder (avoid double processing)
+            if len(path_parts) > 1:
+                continue
+
+            # Get image files in this folder
+            image_files = [f for f in files if Path(f).suffix.lower() in IMAGE_EXTENSIONS]
+
+            if not image_files:
+                continue
+
+            person_success = 0
+            person_failed = 0
+            face_ids = []
+
+            for img_file in image_files:
+                total_images += 1
+                img_path = os.path.join(root, img_file)
+
+                # Get embeddings from all models
+                embeddings = {}
+                for model_name in valid_models:
+                    model = ModelRegistry.get(model_name)
+                    if model:
+                        embedding = model.get_embedding(img_path)
+                        if embedding:
+                            embeddings[model_name] = embedding
+
+                if embeddings:
+                    face = db.add_face(person_name, embeddings, img_path)
+                    face_ids.append(face["id"])
+                    person_success += 1
+                    total_success += 1
+                else:
+                    person_failed += 1
+                    total_failed += 1
+
+            if person_success > 0 or person_failed > 0:
+                results.append(BulkRegisterResult(
+                    name=person_name,
+                    images_processed=len(image_files),
+                    images_success=person_success,
+                    images_failed=person_failed,
+                    face_ids=face_ids
+                ))
+
+        return BulkRegisterResponse(
+            success=total_success > 0,
+            total_persons=len(results),
+            total_images=total_images,
+            successful_registrations=total_success,
+            failed_registrations=total_failed,
+            results=results,
+            models_used=valid_models,
+            message=f"Registered {total_success} faces from {len(results)} persons"
+        )
+
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid ZIP file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing ZIP: {str(e)}")
+    finally:
+        # Cleanup temp directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# Recognize faces from ZIP file
+@app.post("/api/faces/recognize-zip", response_model=BulkRecognizeResponse)
+async def recognize_faces_from_zip(
+    zipfile_upload: UploadFile = File(...),
+    models: str = Form("ArcFace"),
+    ensemble_method: str = Form("average"),
+    threshold: float = Form(DISTANCE_THRESHOLD),
+):
+    """
+    Recognize faces from a ZIP file containing images.
+    Returns recognition results for each image.
+    """
+    if not zipfile_upload.filename.lower().endswith('.zip'):
+        raise HTTPException(status_code=400, detail="File must be a ZIP archive")
+
+    # Parse model names
+    model_names = [m.strip() for m in models.split(",") if m.strip()]
+    if not model_names:
+        model_names = ["ArcFace"]
+
+    # Validate models
+    valid_models = [m for m in model_names if ModelRegistry.is_registered(m)]
+    if not valid_models:
+        raise HTTPException(status_code=400, detail="No valid models specified")
+
+    # Create temp directory for extraction
+    temp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(temp_dir, "upload.zip")
+
+    try:
+        # Save uploaded ZIP
+        content = await zipfile_upload.read()
+        with open(zip_path, 'wb') as f:
+            f.write(content)
+
+        # Extract ZIP
+        extract_dir = os.path.join(temp_dir, "extracted")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+
+        # Find all images in ZIP
+        image_files = []
+        for root, dirs, files in os.walk(extract_dir):
+            for f in files:
+                if Path(f).suffix.lower() in IMAGE_EXTENSIONS:
+                    full_path = os.path.join(root, f)
+                    rel_path = os.path.relpath(full_path, extract_dir)
+                    image_files.append((rel_path, full_path))
+
+        if not image_files:
+            raise HTTPException(status_code=400, detail="No images found in ZIP")
+
+        # Create ensemble if multiple models
+        ensemble = create_ensemble(valid_models, ensemble_method) if len(valid_models) > 1 else None
+        db = get_face_db()
+        results = []
+        processed = 0
+
+        for rel_path, img_path in image_files:
+            processed += 1
+
+            # Get ALL face embeddings from the primary model
+            primary_model = ModelRegistry.get(valid_models[0])
+            all_faces = primary_model.get_all_embeddings(img_path)
+
+            if not all_faces:
+                results.append(BulkRecognizeResult(
+                    filename=rel_path,
+                    success=False,
+                    faces_detected=0,
+                    faces=[],
+                    message="No face detected"
+                ))
+                continue
+
+            face_detections = []
+
+            # Process each detected face
+            for face_data in all_faces:
+                embeddings = {valid_models[0]: face_data.embedding}
+
+                # Get embeddings from other models if multi-model
+                if len(valid_models) > 1:
+                    for model_name in valid_models[1:]:
+                        model = ModelRegistry.get(model_name)
+                        if model:
+                            model_faces = model.get_all_embeddings(img_path)
+                            if model_faces and len(model_faces) > face_data.face_index:
+                                embeddings[model_name] = model_faces[face_data.face_index].embedding
+                            elif model_faces:
+                                embeddings[model_name] = model_faces[0].embedding
+
+                # Find matches
+                if len(embeddings) == 1:
+                    model_name = list(embeddings.keys())[0]
+                    model = ModelRegistry.get(model_name)
+                    matches = db.find_matches_single_model(
+                        embeddings[model_name],
+                        model_name,
+                        model.compare,
+                        threshold
+                    )
+                else:
+                    matches = db.find_matches(
+                        embeddings,
+                        ensemble.compare_embeddings,
+                        threshold,
+                        valid_models
+                    )
+
+                face_detections.append(FaceDetection(
+                    face_index=face_data.face_index,
+                    bbox=list(face_data.bbox) if face_data.bbox else None,
+                    matches=[MatchResponse(**m) for m in matches] if matches else []
+                ))
+
+            total_matches = sum(len(f.matches) for f in face_detections)
+            results.append(BulkRecognizeResult(
+                filename=rel_path,
+                success=True,
+                faces_detected=len(all_faces),
+                faces=face_detections,
+                message=f"Found {len(all_faces)} face(s), {total_matches} match(es)"
+            ))
+
+        return BulkRecognizeResponse(
+            success=True,
+            total_images=len(image_files),
+            processed_images=processed,
+            results=results,
+            models_used=valid_models,
+            ensemble_method=ensemble_method if len(valid_models) > 1 else None,
+            message=f"Processed {processed} images"
+        )
+
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid ZIP file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing ZIP: {str(e)}")
+    finally:
+        # Cleanup temp directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # Delete a registered face

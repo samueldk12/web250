@@ -17,11 +17,12 @@
             <div class="panels">
                 <!-- Register Panel -->
                 <section class="panel" id="register-panel">
-                    <h2>Registrar Face</h2>
+                    <h2>Registrar Faces</h2>
                     <form id="register-form">
-                        <div class="form-group">
-                            <label for="name">Nome</label>
-                            <input type="text" id="name" name="name" required placeholder="Digite o nome">
+                        <div class="form-group" id="name-group">
+                            <label for="name">Nome (apenas para imagem unica)</label>
+                            <input type="text" id="name" name="name" placeholder="Digite o nome">
+                            <p class="help-text">Para ZIP: use pastas com o nome da pessoa</p>
                         </div>
 
                         <div class="form-group">
@@ -34,10 +35,15 @@
                         <div class="upload-area" id="register-upload">
                             <div class="upload-content">
                                 <div class="upload-icon">+</div>
-                                <p>Arraste uma imagem ou clique para selecionar</p>
+                                <p>Arraste uma <strong>imagem</strong> ou <strong>arquivo ZIP</strong></p>
+                                <p class="help-text">ZIP: pasta/nome_pessoa/fotos.jpg</p>
                             </div>
-                            <input type="file" id="register-file" accept="image/*" hidden>
+                            <input type="file" id="register-file" accept="image/*,.zip,application/zip" hidden>
                             <img id="register-preview" class="preview-image" hidden>
+                            <div id="register-zip-info" class="zip-info" hidden>
+                                <span class="zip-icon">📦</span>
+                                <span id="register-zip-name"></span>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-primary" id="register-btn">
                             <span class="btn-text">Registrar</span>
@@ -45,11 +51,12 @@
                         </button>
                     </form>
                     <div id="register-result" class="result-message"></div>
+                    <div id="register-bulk-results" class="bulk-results" hidden></div>
                 </section>
 
                 <!-- Recognize Panel -->
                 <section class="panel" id="recognize-panel">
-                    <h2>Reconhecer Face</h2>
+                    <h2>Reconhecer Faces</h2>
                     <form id="recognize-form">
                         <div class="form-group">
                             <label>Modelos para Reconhecimento</label>
@@ -73,10 +80,15 @@
                         <div class="upload-area" id="recognize-upload">
                             <div class="upload-content">
                                 <div class="upload-icon">+</div>
-                                <p>Arraste uma imagem ou clique para selecionar</p>
+                                <p>Arraste uma <strong>imagem</strong> ou <strong>arquivo ZIP</strong></p>
+                                <p class="help-text">ZIP com multiplas imagens para reconhecimento em lote</p>
                             </div>
-                            <input type="file" id="recognize-file" accept="image/*" hidden>
+                            <input type="file" id="recognize-file" accept="image/*,.zip,application/zip" hidden>
                             <img id="recognize-preview" class="preview-image" hidden>
+                            <div id="recognize-zip-info" class="zip-info" hidden>
+                                <span class="zip-icon">📦</span>
+                                <span id="recognize-zip-name"></span>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-secondary" id="recognize-btn">
                             <span class="btn-text">Reconhecer</span>
@@ -89,6 +101,7 @@
                         <div id="recognize-info" class="recognize-info"></div>
                         <div id="matches-list" class="matches-list"></div>
                     </div>
+                    <div id="bulk-recognize-results" class="bulk-results" hidden></div>
                 </section>
             </div>
 

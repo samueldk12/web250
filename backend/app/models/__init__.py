@@ -14,9 +14,13 @@ from app.models.deepface_models import (
     GhostFaceNetModel,
 )
 
-from app.models.insightface_models import (
-    InsightFaceModel,
-)
+# InsightFace is optional - only import if available
+try:
+    from app.models.insightface_models import InsightFaceModel
+    _insightface_available = True
+except ImportError:
+    InsightFaceModel = None
+    _insightface_available = False
 
 __all__ = [
     'FaceRecognitionModel',
@@ -29,5 +33,7 @@ __all__ = [
     'DeepIDModel',
     'SFaceModel',
     'GhostFaceNetModel',
-    'InsightFaceModel',
 ]
+
+if _insightface_available:
+    __all__.append('InsightFaceModel')

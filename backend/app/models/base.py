@@ -1,6 +1,29 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import numpy as np
+
+
+class FaceData:
+    """Data class for a detected face."""
+    def __init__(
+        self,
+        embedding: List[float],
+        bbox: Optional[Tuple[int, int, int, int]] = None,
+        confidence: float = 1.0,
+        face_index: int = 0
+    ):
+        self.embedding = embedding
+        self.bbox = bbox  # (x, y, w, h)
+        self.confidence = confidence
+        self.face_index = face_index
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "embedding": self.embedding,
+            "bbox": self.bbox,
+            "confidence": self.confidence,
+            "face_index": self.face_index
+        }
 
 
 class FaceRecognitionModel(ABC):
@@ -30,8 +53,16 @@ class FaceRecognitionModel(ABC):
 
     @abstractmethod
     def get_embedding(self, image_path: str) -> Optional[List[float]]:
-        """Extract face embedding from image."""
+        """Extract face embedding from image (largest face only)."""
         pass
+
+    def get_all_embeddings(self, image_path: str) -> List[FaceData]:
+        """Extract embeddings for ALL faces in image. Override in subclass for better performance."""
+        # Default implementation: just return single face
+        embedding = self.get_embedding(image_path)
+        if embedding:
+            return [FaceData(embedding=embedding, face_index=0)]
+        return []
 
     @abstractmethod
     def compare(self, embedding1: List[float], embedding2: List[float]) -> float:
@@ -54,11 +85,16 @@ class FaceRecognitionModel(ABC):
         b = np.array(b)
         return float(np.linalg.norm(a - b))
 
+    def is_available(self) -> bool:
+        """Check if the model is available and can be loaded."""
+        return True  # Override in subclass if needed
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert model info to dictionary."""
         return {
             "name": self.name,
             "display_name": self.display_name,
             "description": self.description,
-            "embedding_size": self.embedding_size
+            "embedding_size": self.embedding_size,
+            "available": self.is_available()
         }

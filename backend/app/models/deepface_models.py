@@ -1,11 +1,15 @@
 """DeepFace-based model implementations."""
 
+import os
+import cv2
+import tempfile
 from typing import List, Optional
 from deepface import DeepFace
 
-from app.models.base import FaceRecognitionModel
+from app.models.base import FaceRecognitionModel, FaceData
 from app.models.registry import ModelRegistry
 from app.config import DEFAULT_DETECTOR
+from app.services.upscaler import get_upscaler, MIN_FACE_SIZE
 
 
 class DeepFaceModelBase(FaceRecognitionModel):
@@ -13,6 +17,7 @@ class DeepFaceModelBase(FaceRecognitionModel):
 
     def __init__(self):
         self._model_loaded = False
+        self._model_available = None  # None = not checked, True/False = checked
         self._detector = DEFAULT_DETECTOR
 
     def _ensure_model_loaded(self):
@@ -21,8 +26,17 @@ class DeepFaceModelBase(FaceRecognitionModel):
             try:
                 DeepFace.build_model(self._model_name)
                 self._model_loaded = True
-            except Exception:
+                self._model_available = True
+            except Exception as e:
+                print(f"Error loading model {self._model_name}: {e}")
                 self._model_loaded = True
+                self._model_available = False
+
+    def is_available(self) -> bool:
+        """Check if the model is available."""
+        if self._model_available is None:
+            self._ensure_model_loaded()
+        return self._model_available if self._model_available is not None else True
 
     @property
     def _model_name(self) -> str:
@@ -30,7 +44,7 @@ class DeepFaceModelBase(FaceRecognitionModel):
         return self.name
 
     def get_embedding(self, image_path: str) -> Optional[List[float]]:
-        """Extract face embedding from image."""
+        """Extract face embedding from image (largest face only)."""
         self._ensure_model_loaded()
         try:
             result = DeepFace.represent(
@@ -40,11 +54,86 @@ class DeepFaceModelBase(FaceRecognitionModel):
                 enforce_detection=True
             )
             if result and len(result) > 0:
-                return result[0]["embedding"]
+                # Return largest face
+                if len(result) == 1:
+                    return result[0]["embedding"]
+                # Find largest face by area
+                largest = max(result, key=lambda x: x.get("facial_area", {}).get("w", 0) * x.get("facial_area", {}).get("h", 0))
+                return largest["embedding"]
             return None
         except Exception as e:
             print(f"Error extracting embedding with {self.name}: {e}")
             return None
+
+    def get_all_embeddings(self, image_path: str) -> List[FaceData]:
+        """Extract embeddings for ALL faces in image, with upscaling for small faces."""
+        self._ensure_model_loaded()
+        try:
+            result = DeepFace.represent(
+                img_path=image_path,
+                model_name=self._model_name,
+                detector_backend=self._detector,
+                enforce_detection=True
+            )
+
+            faces = []
+            upscaler = get_upscaler()
+            image = None  # Lazy load only if needed
+
+            for i, face_result in enumerate(result):
+                facial_area = face_result.get("facial_area", {})
+                bbox = (
+                    facial_area.get("x", 0),
+                    facial_area.get("y", 0),
+                    facial_area.get("w", 0),
+                    facial_area.get("h", 0)
+                )
+                confidence = face_result.get("face_confidence", 1.0)
+                embedding = face_result["embedding"]
+
+                # Check if face is too small and might benefit from upscaling
+                if upscaler.needs_upscaling(bbox):
+                    try:
+                        # Load image if not already loaded
+                        if image is None:
+                            image = cv2.imread(image_path)
+
+                        if image is not None:
+                            # Upscale the face region
+                            upscaled_region, new_bbox = upscaler.upscale_face_region(image, bbox)
+
+                            # Save to temp file and re-extract embedding
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                                cv2.imwrite(tmp.name, upscaled_region)
+                                try:
+                                    upscaled_result = DeepFace.represent(
+                                        img_path=tmp.name,
+                                        model_name=self._model_name,
+                                        detector_backend=self._detector,
+                                        enforce_detection=True
+                                    )
+                                    if upscaled_result and len(upscaled_result) > 0:
+                                        # Use the upscaled embedding (better quality)
+                                        embedding = upscaled_result[0]["embedding"]
+                                        print(f"Face {i}: Upscaled from {bbox[2]}x{bbox[3]} for better embedding")
+                                except Exception as e:
+                                    print(f"Upscaling extraction failed for face {i}: {e}")
+                                finally:
+                                    os.unlink(tmp.name)
+                    except Exception as e:
+                        print(f"Error during upscaling for face {i}: {e}")
+
+                faces.append(FaceData(
+                    embedding=embedding,
+                    bbox=bbox,
+                    confidence=confidence,
+                    face_index=i
+                ))
+
+            return faces
+        except Exception as e:
+            print(f"Error extracting embeddings with {self.name}: {e}")
+            return []
 
     def compare(self, embedding1: List[float], embedding2: List[float]) -> float:
         """Compare two embeddings using cosine distance."""
