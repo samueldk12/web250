@@ -116,7 +116,7 @@ class InsightFaceModelBase(FaceRecognitionModel):
         return self.cosine_distance(embedding1, embedding2)
 
 
-# Only register InsightFace model if the library is available
+# Only register InsightFace models if the library is available
 if INSIGHTFACE_AVAILABLE:
     @ModelRegistry.register
     class InsightFaceModel(InsightFaceModelBase):
@@ -137,5 +137,80 @@ if INSIGHTFACE_AVAILABLE:
         @property
         def embedding_size(self) -> int:
             return 512
+
+    @ModelRegistry.register
+    class InsightFaceAntelopeV2Model(InsightFaceModelBase):
+        """InsightFace AntelopeV2 - Latest highest-accuracy model pack."""
+
+        _app = None  # Own class-level app (separate from InsightFaceModelBase._app)
+
+        @classmethod
+        def _get_app(cls):
+            if cls._app is None and INSIGHTFACE_AVAILABLE and FaceAnalysis is not None:
+                try:
+                    cls._app = FaceAnalysis(
+                        name='antelopev2',
+                        providers=['CPUExecutionProvider']
+                    )
+                    cls._app.prepare(ctx_id=-1, det_size=(640, 640))
+                    print("InsightFace antelopev2 initialized successfully")
+                except Exception as e:
+                    print(f"Error initializing InsightFace antelopev2: {e}")
+                    cls._app = None
+            return cls._app
+
+        @property
+        def name(self) -> str:
+            return "AntelopeV2"
+
+        @property
+        def display_name(self) -> str:
+            return "InsightFace (Antelope v2)"
+
+        @property
+        def description(self) -> str:
+            return "InsightFace's latest model pack. Highest accuracy, best for production use."
+
+        @property
+        def embedding_size(self) -> int:
+            return 512
+
+    @ModelRegistry.register
+    class InsightFaceBuffaloMModel(InsightFaceModelBase):
+        """InsightFace Buffalo-M - Balanced medium-size model."""
+
+        _app = None  # Own class-level app
+
+        @classmethod
+        def _get_app(cls):
+            if cls._app is None and INSIGHTFACE_AVAILABLE and FaceAnalysis is not None:
+                try:
+                    cls._app = FaceAnalysis(
+                        name='buffalo_m',
+                        providers=['CPUExecutionProvider']
+                    )
+                    cls._app.prepare(ctx_id=-1, det_size=(640, 640))
+                    print("InsightFace buffalo_m initialized successfully")
+                except Exception as e:
+                    print(f"Error initializing InsightFace buffalo_m: {e}")
+                    cls._app = None
+            return cls._app
+
+        @property
+        def name(self) -> str:
+            return "BuffaloM"
+
+        @property
+        def display_name(self) -> str:
+            return "InsightFace (Buffalo-M)"
+
+        @property
+        def description(self) -> str:
+            return "InsightFace medium model (R50 backbone). Good balance of speed and accuracy."
+
+        @property
+        def embedding_size(self) -> int:
+            return 512
+
 else:
-    print("InsightFace model not registered due to import issues")
+    print("InsightFace models not registered due to import issues")

@@ -30,6 +30,8 @@ def download_deepface_models():
         "DeepID",
         "SFace",
         "GhostFaceNet",
+        "DeepFace",   # Meta/Facebook historical model
+        "Dlib",       # dlib ResNet (same backbone as face_recognition library)
     ]
 
     for model_name in models:
@@ -46,7 +48,6 @@ def download_deepface_models():
     for detector in detectors:
         try:
             print(f"[*] Initializing {detector} detector...")
-            # This will trigger detector download
             DeepFace.build_model("ArcFace")
         except Exception as e:
             print(f"[-] Error with {detector}: {e}")
@@ -61,16 +62,56 @@ def download_insightface_models():
     try:
         from insightface.app import FaceAnalysis
 
-        print("\n[*] Downloading InsightFace buffalo_l model...")
-        app = FaceAnalysis(
-            name='buffalo_l',
-            providers=['CPUExecutionProvider']
-        )
-        app.prepare(ctx_id=-1, det_size=(640, 640))
-        print("[+] InsightFace buffalo_l downloaded successfully!")
+        packs = [
+            ("buffalo_l",   (640, 640)),  # Large — ArcFace R100 (shared by InsightFace + EdgeFace detector)
+            ("antelopev2",  (640, 640)),  # Latest highest-accuracy pack
+            ("buffalo_m",   (640, 640)),  # Medium — ArcFace R50
+        ]
+
+        for pack_name, det_size in packs:
+            try:
+                print(f"\n[*] Downloading InsightFace {pack_name} model...")
+                app = FaceAnalysis(name=pack_name, providers=['CPUExecutionProvider'])
+                app.prepare(ctx_id=-1, det_size=det_size)
+                print(f"[+] InsightFace {pack_name} downloaded successfully!")
+            except Exception as e:
+                print(f"[-] Error downloading InsightFace {pack_name}: {e}")
 
     except Exception as e:
-        print(f"[-] Error downloading InsightFace: {e}")
+        print(f"[-] InsightFace not available: {e}")
+
+
+def download_edgeface_models():
+    """Download EdgeFace models via torch.hub."""
+    print("\n" + "=" * 60)
+    print("Downloading EdgeFace models (torch.hub)...")
+    print("=" * 60)
+
+    try:
+        import torch
+
+        variants = [
+            "edgeface_xs_gamma_06",  # Ultra-compact, EFaR 2023 winner
+            "edgeface_s_gamma_05",   # Slightly larger, better accuracy
+        ]
+
+        for variant in variants:
+            try:
+                print(f"\n[*] Downloading EdgeFace {variant}...")
+                model = torch.hub.load(
+                    'otroshi/edgeface',
+                    variant,
+                    source='github',
+                    pretrained=True,
+                    trust_repo=True
+                )
+                model.eval()
+                print(f"[+] EdgeFace {variant} downloaded successfully!")
+            except Exception as e:
+                print(f"[-] Error downloading EdgeFace {variant}: {e}")
+
+    except ImportError:
+        print("[-] PyTorch not available — EdgeFace models skipped.")
 
 
 def print_upscaling_info():
@@ -109,6 +150,7 @@ def main():
     # Download models
     download_deepface_models()
     download_insightface_models()
+    download_edgeface_models()
 
     # Print upscaling info
     print_upscaling_info()

@@ -84,7 +84,10 @@
                                 <p class="help-text">ZIP com multiplas imagens para reconhecimento em lote</p>
                             </div>
                             <input type="file" id="recognize-file" accept="image/*,.zip,application/zip" hidden>
-                            <img id="recognize-preview" class="preview-image" hidden>
+                            <div id="recognize-preview-wrapper" class="preview-wrapper" hidden>
+                                <img id="recognize-preview" class="preview-image">
+                                <canvas id="recognize-canvas" class="face-canvas"></canvas>
+                            </div>
                             <div id="recognize-zip-info" class="zip-info" hidden>
                                 <span class="zip-icon">📦</span>
                                 <span id="recognize-zip-name"></span>

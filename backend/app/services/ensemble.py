@@ -17,17 +17,27 @@ class EnsembleMethod(str, Enum):
     MAX = "max"               # Maximum distance (most conservative)
 
 
-# Default weights based on general model performance
+# Default weights based on general model performance / competition results
 MODEL_WEIGHTS = {
+    # --- High accuracy ---
     "ArcFace": 1.0,
-    "InsightFace": 1.0,
+    "InsightFace": 1.0,        # buffalo_l  (ArcFace R100)
+    "AntelopeV2": 1.0,         # Latest InsightFace model pack
     "Facenet512": 0.9,
-    "Facenet": 0.85,
-    "VGG-Face": 0.8,
-    "SFace": 0.85,
     "GhostFaceNet": 0.9,
-    "OpenFace": 0.7,
+    # --- Medium accuracy ---
+    "EdgeFaceS": 0.88,         # EFaR 2023 winner — S variant
+    "BuffaloM": 0.87,          # InsightFace buffalo_m (R50)
+    "EdgeFaceXS": 0.85,        # EFaR 2023 winner — XS (ultra-compact)
+    "SFace": 0.85,
+    "Facenet": 0.85,
+    "Dlib": 0.80,              # dlib ResNet (same as face_recognition lib)
+    "FaceRecognition": 0.80,   # face_recognition library (dlib ResNet)
+    "VGG-Face": 0.80,
+    # --- Lighter / legacy ---
+    "DeepFaceMeta": 0.75,      # Historical Meta/Facebook DeepFace CNN
     "DeepID": 0.75,
+    "OpenFace": 0.70,
 }
 
 

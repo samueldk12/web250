@@ -13,6 +13,8 @@ const registerFile = document.getElementById('register-file');
 const recognizeFile = document.getElementById('recognize-file');
 const registerPreview = document.getElementById('register-preview');
 const recognizePreview = document.getElementById('recognize-preview');
+const recognizePreviewWrapper = document.getElementById('recognize-preview-wrapper');
+const recognizeCanvas = document.getElementById('recognize-canvas');
 const registerZipInfo = document.getElementById('register-zip-info');
 const recognizeZipInfo = document.getElementById('recognize-zip-info');
 const registerZipName = document.getElementById('register-zip-name');
@@ -36,7 +38,7 @@ const nameGroup = document.getElementById('name-group');
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     setupUploadArea(registerUpload, registerFile, registerPreview, registerZipInfo, registerZipName);
-    setupUploadArea(recognizeUpload, recognizeFile, recognizePreview, recognizeZipInfo, recognizeZipName);
+    setupUploadArea(recognizeUpload, recognizeFile, recognizePreview, recognizeZipInfo, recognizeZipName, recognizePreviewWrapper, recognizeCanvas);
     loadModels();
     loadFaces();
 });
@@ -115,7 +117,8 @@ function getSelectedModels(name) {
 }
 
 // Setup upload area with drag & drop
-function setupUploadArea(uploadArea, fileInput, preview, zipInfo, zipName) {
+// previewWrapper and canvas are optional — only used for the recognize panel
+function setupUploadArea(uploadArea, fileInput, preview, zipInfo, zipName, previewWrapper = null, canvas = null) {
     const uploadContent = uploadArea.querySelector('.upload-content');
 
     uploadArea.addEventListener('click', () => fileInput.click());
@@ -135,34 +138,41 @@ function setupUploadArea(uploadArea, fileInput, preview, zipInfo, zipName) {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             fileInput.files = files;
-            showFilePreview(files[0], preview, uploadContent, zipInfo, zipName);
+            showFilePreview(files[0], preview, uploadContent, zipInfo, zipName, previewWrapper, canvas);
             updateNameFieldVisibility(fileInput);
         }
     });
 
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-            showFilePreview(e.target.files[0], preview, uploadContent, zipInfo, zipName);
+            showFilePreview(e.target.files[0], preview, uploadContent, zipInfo, zipName, previewWrapper, canvas);
             updateNameFieldVisibility(fileInput);
         }
     });
 }
 
 // Show file preview (image or ZIP info)
-function showFilePreview(file, preview, uploadContent, zipInfo, zipName) {
+// previewWrapper: optional wrapper <div> for the canvas overlay (recognize panel only)
+// canvas: optional <canvas> to clear when a new image is selected
+function showFilePreview(file, preview, uploadContent, zipInfo, zipName, previewWrapper = null, canvas = null) {
+    const visibleEl = previewWrapper || preview;
+
     if (isZipFile(file)) {
-        // Show ZIP info
-        preview.hidden = true;
+        // Show ZIP info, hide image preview
+        visibleEl.hidden = true;
         zipInfo.hidden = false;
         zipName.textContent = file.name;
         uploadContent.style.display = 'none';
+        // Clear any previous face boxes
+        if (canvas) clearCanvas(canvas);
     } else {
         // Show image preview
         zipInfo.hidden = true;
+        if (canvas) clearCanvas(canvas);
         const reader = new FileReader();
         reader.onload = (e) => {
             preview.src = e.target.result;
-            preview.hidden = false;
+            visibleEl.hidden = false;
             uploadContent.style.display = 'none';
         };
         reader.readAsDataURL(file);
@@ -182,14 +192,117 @@ function updateNameFieldVisibility(fileInput) {
 }
 
 // Reset upload area
-function resetUpload(uploadArea, fileInput, preview, zipInfo) {
+function resetUpload(uploadArea, fileInput, preview, zipInfo, previewWrapper = null, canvas = null) {
     const uploadContent = uploadArea.querySelector('.upload-content');
     fileInput.value = '';
     preview.src = '';
-    preview.hidden = true;
+    if (previewWrapper) previewWrapper.hidden = true;
+    else preview.hidden = true;
     if (zipInfo) zipInfo.hidden = true;
     uploadContent.style.display = 'block';
     if (nameGroup) nameGroup.style.display = 'block';
+    if (canvas) clearCanvas(canvas);
+}
+
+// Clear canvas drawing
+function clearCanvas(canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// ── Face bounding-box drawing ────────────────────────────────────────────────
+
+const BBOX_COLORS = [
+    '#00e676', '#ff1744', '#2979ff', '#ffea00',
+    '#ff6d00', '#d500f9', '#00e5ff', '#76ff03'
+];
+
+// Return black or white for best contrast against a hex color
+function contrastColor(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55 ? '#000000' : '#ffffff';
+}
+
+// Draw bounding boxes and name labels on the recognize canvas
+function drawFaceBboxes(faces) {
+    const img = recognizePreview;
+    const canvas = recognizeCanvas;
+
+    const render = () => {
+        // Use natural image resolution as canvas coordinate space —
+        // CSS scales the canvas visually to match the displayed image size.
+        canvas.width  = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Scale line widths / fonts relative to image size
+        const lineW    = Math.max(3, canvas.width / 180);
+        const fontSize = Math.max(18, Math.round(canvas.width / 32));
+        const pad      = Math.round(fontSize * 0.35);
+
+        faces.forEach((face, idx) => {
+            if (!face.bbox) return;
+
+            const [x, y, w, h] = face.bbox;
+            const color = BBOX_COLORS[idx % BBOX_COLORS.length];
+
+            // ── bounding box ──
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth   = lineW;
+            ctx.shadowColor = 'rgba(0,0,0,0.6)';
+            ctx.shadowBlur  = lineW * 2;
+            ctx.strokeRect(x, y, w, h);
+            ctx.restore();
+
+            // ── label text ──
+            let label = 'Desconhecido';
+            if (face.matches && face.matches.length > 0) {
+                const best = face.matches[0];
+                const pct  = Math.round(best.confidence * 100);
+                label = `${best.name}  ${pct}%`;
+            }
+
+            ctx.font = `bold ${fontSize}px sans-serif`;
+            const textW  = ctx.measureText(label).width;
+            const boxW   = textW + pad * 2;
+            const boxH   = fontSize + pad * 1.6;
+
+            // Place label above the box; if no room above, place below
+            const labelTop = y - boxH - lineW >= 0
+                ? y - boxH - lineW
+                : y + h + lineW;
+
+            // Background pill
+            ctx.save();
+            ctx.fillStyle = color;
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur  = 6;
+            ctx.beginPath();
+            const r = boxH / 3;
+            ctx.roundRect(x, labelTop, boxW, boxH, r);
+            ctx.fill();
+            ctx.restore();
+
+            // Text
+            ctx.save();
+            ctx.fillStyle = contrastColor(color);
+            ctx.font      = `bold ${fontSize}px sans-serif`;
+            ctx.fillText(label, x + pad, labelTop + fontSize + pad * 0.4);
+            ctx.restore();
+        });
+    };
+
+    // Image may already be decoded (it was shown in the preview before recognition)
+    if (img.complete && img.naturalWidth > 0) {
+        render();
+    } else {
+        img.addEventListener('load', render, { once: true });
+    }
 }
 
 // Show result message
@@ -267,7 +380,7 @@ async function registerSingleImage(name, file, selectedModels) {
             const modelsUsed = data.models_used.join(', ');
             showResult(registerResult, `${data.message} (Modelos: ${modelsUsed})`);
             document.getElementById('name').value = '';
-            resetUpload(registerUpload, registerFile, registerPreview, registerZipInfo);
+            resetUpload(registerUpload, registerFile, registerPreview, registerZipInfo, null, null);
             loadFaces();
         } else {
             showResult(registerResult, data.detail || data.message || 'Erro ao registrar face.', true);
@@ -299,7 +412,7 @@ async function registerFromZip(file, selectedModels) {
         if (response.ok) {
             showResult(registerResult, data.message);
             displayBulkRegisterResults(data);
-            resetUpload(registerUpload, registerFile, registerPreview, registerZipInfo);
+            resetUpload(registerUpload, registerFile, registerPreview, registerZipInfo, null, null);
             loadFaces();
         } else {
             showResult(registerResult, data.detail || 'Erro ao processar arquivo ZIP.', true);
@@ -419,12 +532,16 @@ async function recognizeSingleImage(file, selectedModels, ensembleMethodValue) {
             if (data.faces && data.faces.length > 0) {
                 showResult(recognizeResult, data.message);
                 displayMultiFaceMatches(data.faces, data.models_used, data.ensemble_method, data.faces_detected);
+                drawFaceBboxes(data.faces);
             } else if (data.matches && data.matches.length > 0) {
                 // Fallback for single face (backward compatibility)
                 showResult(recognizeResult, data.message);
                 displayMatches(data.matches, data.models_used, data.ensemble_method);
+                // Wrap single-face matches in a face-like structure for drawing
+                drawFaceBboxes([{ bbox: null, matches: data.matches }]);
             } else {
                 showResult(recognizeResult, data.message || 'Nenhuma correspondencia encontrada.', true);
+                clearCanvas(recognizeCanvas);
             }
         } else {
             showResult(recognizeResult, data.detail || 'Erro ao reconhecer face.', true);

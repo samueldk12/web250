@@ -23,6 +23,15 @@ scipy>=1.10.0
 # Fix ml_dtypes compatibility
 ml_dtypes==0.3.2
 
+# face_recognition library (dlib ResNet — optional)
+# Requires cmake + build-essential (already in Dockerfile).
+# Compilation may take 5-10 min during Docker build.
+face_recognition
+
+# PyTorch CPU-only for EdgeFace models is installed separately in the Dockerfile
+# with --index-url https://download.pytorch.org/whl/cpu to avoid the CUDA build.
+# Do NOT add torch here — it would pull in the CUDA build from PyPI.
+
 # Image upscaling (optional - Real-ESRGAN)
 # Uncomment to enable Real-ESRGAN upscaling (adds ~500MB dependencies)
 # basicsr>=1.4.2

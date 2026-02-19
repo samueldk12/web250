@@ -27,4 +27,4 @@ FACES_PATH.mkdir(parents=True, exist_ok=True)
 # Model settings
 DEFAULT_MODEL = "ArcFace"
 DEFAULT_DETECTOR = "retinaface"
-DISTANCE_THRESHOLD = 0.7  # Cosine distance threshold for match (0.0-1.0, lower = stricter)
+DISTANCE_THRESHOLD = 0.82  # Cosine distance threshold for match (0.0-1.0, lower = stricter)

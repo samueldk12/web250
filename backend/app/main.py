@@ -18,6 +18,84 @@ from app.storage.face_db import get_face_db
 # Supported image extensions
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 
+# Folders to ignore when extracting ZIPs (macOS artifacts, etc.)
+_ZIP_SKIP_DIRS = {'__MACOSX', '__pycache__', '.git'}
+
+
+def _resolve_models(models_str: str) -> list[str]:
+    """
+    Parse a comma-separated model string.
+    Returns all registered available models when the string is empty.
+    """
+    names = [m.strip() for m in models_str.split(",") if m.strip()]
+    if not names:
+        # Default: every model that is registered AND available
+        names = [m.name for m in ModelRegistry.get_all() if m.is_available()]
+    # Keep only models that actually exist in the registry
+    return [n for n in names if ModelRegistry.is_registered(n)]
+
+
+def _find_persons_in_zip(extract_dir: str) -> dict:
+    """
+    Scan an extracted ZIP directory and return {person_name: [abs_image_paths]}.
+
+    Supported layouts
+    ─────────────────
+    Layout A – flat folders at root:
+        extracted/
+        ├── joao/foto1.jpg
+        └── maria/foto1.jpg
+
+    Layout B – single wrapper folder (common when zipping a directory):
+        extracted/
+        └── pessoas/
+            ├── joao/foto1.jpg
+            └── maria/foto1.jpg
+
+    Layout C – images directly at root (no person sub-folders):
+        extracted/foto_joao.jpg  →  person name = filename stem
+    """
+    from collections import defaultdict
+
+    # Gather every image grouped by its immediate parent folder
+    by_folder: dict = defaultdict(list)
+    for root, dirs, files in os.walk(extract_dir):
+        # Prune folders we should ignore
+        dirs[:] = [d for d in dirs
+                   if not d.startswith('.') and d not in _ZIP_SKIP_DIRS]
+        for fname in files:
+            if fname.startswith('.'):
+                continue
+            if Path(fname).suffix.lower() in IMAGE_EXTENSIONS:
+                by_folder[root].append(os.path.join(root, fname))
+
+    if not by_folder:
+        return {}
+
+    # Detect a single top-level wrapper folder and treat it as the new root
+    root_entries = [e for e in os.listdir(extract_dir)
+                    if not e.startswith('.') and e not in _ZIP_SKIP_DIRS]
+    base_dir = extract_dir
+    if len(root_entries) == 1:
+        candidate = os.path.join(extract_dir, root_entries[0])
+        if os.path.isdir(candidate):
+            base_dir = candidate
+
+    # Build person → images mapping
+    persons: dict = defaultdict(list)
+    for folder, images in by_folder.items():
+        rel = os.path.relpath(folder, base_dir)
+        if rel == '.':
+            # Images sit directly in the base — use filename stem as person name
+            for img_path in images:
+                persons[Path(img_path).stem].append(img_path)
+        else:
+            # Person name = first path component under base_dir
+            person_name = rel.split(os.sep)[0]
+            persons[person_name].extend(images)
+
+    return dict(persons)
+
 
 app = FastAPI(
     title="Face Recognition API",
@@ -186,27 +264,15 @@ async def get_face_image(face_id: str):
 async def register_face(
     name: str = Form(...),
     image: UploadFile = File(...),
-    models: str = Form("ArcFace"),  # Comma-separated model names
+    models: str = Form(""),  # Comma-separated names; empty = all available models
 ):
     # Validate file type
     if not image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
-    # Parse model names
-    model_names = [m.strip() for m in models.split(",") if m.strip()]
-    if not model_names:
-        model_names = ["ArcFace"]
-
-    # Validate models
-    valid_models = []
-    for name_model in model_names:
-        if ModelRegistry.is_registered(name_model):
-            valid_models.append(name_model)
-        else:
-            print(f"Warning: Model {name_model} not found, skipping")
-
+    valid_models = _resolve_models(models)
     if not valid_models:
-        raise HTTPException(status_code=400, detail="No valid models specified")
+        raise HTTPException(status_code=400, detail="No valid models available")
 
     # Save uploaded file temporarily
     suffix = Path(image.filename).suffix or ".jpg"
@@ -256,7 +322,7 @@ async def register_face(
 @app.post("/api/faces/recognize", response_model=RecognitionResponse)
 async def recognize_face(
     image: UploadFile = File(...),
-    models: str = Form("ArcFace"),  # Comma-separated model names
+    models: str = Form(""),  # Comma-separated model names; empty = all available
     ensemble_method: str = Form("average"),  # Ensemble method
     threshold: float = Form(DISTANCE_THRESHOLD),
 ):
@@ -264,17 +330,7 @@ async def recognize_face(
     if not image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
-    # Parse model names
-    model_names = [m.strip() for m in models.split(",") if m.strip()]
-    if not model_names:
-        model_names = ["ArcFace"]
-
-    # Validate models
-    valid_models = []
-    for name_model in model_names:
-        if ModelRegistry.is_registered(name_model):
-            valid_models.append(name_model)
-
+    valid_models = _resolve_models(models)
     if not valid_models:
         raise HTTPException(status_code=400, detail="No valid models specified")
 
@@ -377,116 +433,81 @@ async def recognize_face(
 @app.post("/api/faces/register-zip", response_model=BulkRegisterResponse)
 async def register_faces_from_zip(
     zipfile_upload: UploadFile = File(...),
-    models: str = Form("ArcFace"),
+    models: str = Form(""),  # Empty = all available models
 ):
     """
     Register faces from a ZIP file.
-    ZIP structure: each folder name is the person's name, containing their face images.
+
+    Expected ZIP structure (each folder = one person):
+        pessoas.zip
+        ├── joao/
+        │   ├── foto1.jpg
+        │   └── foto2.jpg
+        ├── maria/
+        │   └── foto1.jpg
+        └── pedro/
+            └── img1.png
+
+    A single top-level wrapper folder is handled automatically:
+        archive.zip/
+        └── pessoas/       ← auto-detected wrapper
+            ├── joao/...
+            └── maria/...
     """
     if not zipfile_upload.filename.lower().endswith('.zip'):
         raise HTTPException(status_code=400, detail="File must be a ZIP archive")
 
-    # Parse model names
-    model_names = [m.strip() for m in models.split(",") if m.strip()]
-    if not model_names:
-        model_names = ["ArcFace"]
-
-    # Validate models
-    valid_models = [m for m in model_names if ModelRegistry.is_registered(m)]
+    valid_models = _resolve_models(models)
     if not valid_models:
-        raise HTTPException(status_code=400, detail="No valid models specified")
+        raise HTTPException(status_code=400, detail="No valid models available")
 
-    # Create temp directory for extraction
     temp_dir = tempfile.mkdtemp()
     zip_path = os.path.join(temp_dir, "upload.zip")
 
     try:
-        # Save uploaded ZIP
+        # Save and extract ZIP
         content = await zipfile_upload.read()
         with open(zip_path, 'wb') as f:
             f.write(content)
 
-        # Extract ZIP
         extract_dir = os.path.join(temp_dir, "extracted")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(extract_dir)
 
-        # Process each folder (person)
+        # Resolve person → image paths using the smart helper
+        persons = _find_persons_in_zip(extract_dir)
+
+        if not persons:
+            raise HTTPException(
+                status_code=400,
+                detail="No images found in ZIP. "
+                       "Expected structure: one sub-folder per person containing their photos."
+            )
+
         db = get_face_db()
         results = []
         total_images = 0
         total_success = 0
         total_failed = 0
 
-        # Walk through extracted directory
-        for root, dirs, files in os.walk(extract_dir):
-            # Get relative path to determine person name
-            rel_path = os.path.relpath(root, extract_dir)
-
-            # Skip root directory
-            if rel_path == '.':
-                # Check if there are image files directly in root (no subfolders)
-                image_files = [f for f in files if Path(f).suffix.lower() in IMAGE_EXTENSIONS]
-                if image_files and not dirs:
-                    # Images directly in ZIP without folders - use filename as name
-                    for img_file in image_files:
-                        total_images += 1
-                        img_path = os.path.join(root, img_file)
-                        person_name = Path(img_file).stem  # Use filename without extension
-
-                        # Get embeddings
-                        embeddings = {}
-                        for model_name in valid_models:
-                            model = ModelRegistry.get(model_name)
-                            if model:
-                                embedding = model.get_embedding(img_path)
-                                if embedding:
-                                    embeddings[model_name] = embedding
-
-                        if embeddings:
-                            face = db.add_face(person_name, embeddings, img_path)
-                            total_success += 1
-                            results.append(BulkRegisterResult(
-                                name=person_name,
-                                images_processed=1,
-                                images_success=1,
-                                images_failed=0,
-                                face_ids=[face["id"]]
-                            ))
-                        else:
-                            total_failed += 1
-                continue
-
-            # Get person name from folder structure (first level folder)
-            path_parts = rel_path.split(os.sep)
-            person_name = path_parts[0]
-
-            # Skip if this isn't the direct subfolder (avoid double processing)
-            if len(path_parts) > 1:
-                continue
-
-            # Get image files in this folder
-            image_files = [f for f in files if Path(f).suffix.lower() in IMAGE_EXTENSIONS]
-
-            if not image_files:
-                continue
-
+        for person_name, image_paths in persons.items():
             person_success = 0
             person_failed = 0
             face_ids = []
 
-            for img_file in image_files:
+            for img_path in image_paths:
                 total_images += 1
-                img_path = os.path.join(root, img_file)
-
-                # Get embeddings from all models
                 embeddings = {}
+
                 for model_name in valid_models:
                     model = ModelRegistry.get(model_name)
                     if model:
-                        embedding = model.get_embedding(img_path)
-                        if embedding:
-                            embeddings[model_name] = embedding
+                        try:
+                            embedding = model.get_embedding(img_path)
+                            if embedding:
+                                embeddings[model_name] = embedding
+                        except Exception as e:
+                            print(f"[ZIP] {model_name} failed on {img_path}: {e}")
 
                 if embeddings:
                     face = db.add_face(person_name, embeddings, img_path)
@@ -496,15 +517,15 @@ async def register_faces_from_zip(
                 else:
                     person_failed += 1
                     total_failed += 1
+                    print(f"[ZIP] No face detected in {img_path} for person '{person_name}'")
 
-            if person_success > 0 or person_failed > 0:
-                results.append(BulkRegisterResult(
-                    name=person_name,
-                    images_processed=len(image_files),
-                    images_success=person_success,
-                    images_failed=person_failed,
-                    face_ids=face_ids
-                ))
+            results.append(BulkRegisterResult(
+                name=person_name,
+                images_processed=len(image_paths),
+                images_success=person_success,
+                images_failed=person_failed,
+                face_ids=face_ids
+            ))
 
         return BulkRegisterResponse(
             success=total_success > 0,
@@ -514,15 +535,16 @@ async def register_faces_from_zip(
             failed_registrations=total_failed,
             results=results,
             models_used=valid_models,
-            message=f"Registered {total_success} faces from {len(results)} persons"
+            message=f"Registered {total_success} faces across {len(results)} person(s)"
         )
 
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing ZIP: {str(e)}")
     finally:
-        # Cleanup temp directory
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -530,7 +552,7 @@ async def register_faces_from_zip(
 @app.post("/api/faces/recognize-zip", response_model=BulkRecognizeResponse)
 async def recognize_faces_from_zip(
     zipfile_upload: UploadFile = File(...),
-    models: str = Form("ArcFace"),
+    models: str = Form(""),  # Empty = all available
     ensemble_method: str = Form("average"),
     threshold: float = Form(DISTANCE_THRESHOLD),
 ):
@@ -541,13 +563,7 @@ async def recognize_faces_from_zip(
     if not zipfile_upload.filename.lower().endswith('.zip'):
         raise HTTPException(status_code=400, detail="File must be a ZIP archive")
 
-    # Parse model names
-    model_names = [m.strip() for m in models.split(",") if m.strip()]
-    if not model_names:
-        model_names = ["ArcFace"]
-
-    # Validate models
-    valid_models = [m for m in model_names if ModelRegistry.is_registered(m)]
+    valid_models = _resolve_models(models)
     if not valid_models:
         raise HTTPException(status_code=400, detail="No valid models specified")
 

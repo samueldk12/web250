@@ -310,3 +310,49 @@ class GhostFaceNetModel(DeepFaceModelBase):
     @property
     def embedding_size(self) -> int:
         return 512
+
+
+@ModelRegistry.register
+class DeepFaceMetaModel(DeepFaceModelBase):
+    """DeepFace (Meta/Facebook) - Historical deep learning baseline."""
+
+    @property
+    def name(self) -> str:
+        return "DeepFaceMeta"
+
+    @property
+    def _model_name(self) -> str:
+        return "DeepFace"
+
+    @property
+    def display_name(self) -> str:
+        return "DeepFace (Meta)"
+
+    @property
+    def description(self) -> str:
+        return "Meta/Facebook's original DeepFace CNN. Historical baseline that popularized deep face recognition."
+
+    @property
+    def embedding_size(self) -> int:
+        return 4096
+
+
+@ModelRegistry.register
+class DlibModel(DeepFaceModelBase):
+    """Dlib ResNet model - Same backbone used by face_recognition library."""
+
+    @property
+    def name(self) -> str:
+        return "Dlib"
+
+    @property
+    def display_name(self) -> str:
+        return "Dlib ResNet"
+
+    @property
+    def description(self) -> str:
+        return "dlib's ResNet-based model (same as face_recognition library). Fast and widely used."
+
+    @property
+    def embedding_size(self) -> int:
+        return 128
