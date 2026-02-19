@@ -1,16 +1,21 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Face Recognition System</title>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="container">
         <header>
             <h1>Sistema de Reconhecimento Facial</h1>
             <p class="subtitle">Multi-Model Face Recognition with Ensemble Support</p>
+            <a href="settings.html" class="btn btn-secondary"
+                style="display: inline-block; width: auto; margin-top: 10px; font-size: 0.9rem;">⚙️ Configurações
+                Avançadas</a>
         </header>
 
         <main>
@@ -75,6 +80,38 @@
                                 <option value="max">Maximo (conservador)</option>
                             </select>
                             <p class="help-text">Selecione como combinar os resultados dos modelos</p>
+
+                            <!-- Voting specific options -->
+                            <div id="voting-options"
+                                style="margin-top: 10px; padding: 10px; background: #f0f4f8; border-radius: 6px;"
+                                hidden>
+                                <div class="form-group">
+                                    <label for="min-votes">Mínimo de Votos</label>
+                                    <input type="number" id="min-votes" class="form-select" min="1" value="2">
+                                    <p class="help-text">Número mínimo de IAs que devem concordar</p>
+                                </div>
+                                <div class="form-group">
+                                    <label for="voting-confidence">Confiança Mínima por IA (%)</label>
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <input type="range" id="voting-confidence" min="0" max="100" value="50"
+                                            style="flex: 1;">
+                                        <span id="voting-confidence-value"
+                                            style="font-weight: bold; min-width: 40px; text-align: right;">50%</span>
+                                    </div>
+                                    <p class="help-text">Confiança individual necessária para contar como voto</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="confidence-threshold">Limiar de Confiança (%)</label>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <input type="range" id="confidence-threshold" min="0" max="100" value="40"
+                                    style="flex: 1;">
+                                <span id="confidence-value"
+                                    style="font-weight: bold; min-width: 40px; text-align: right;">40%</span>
+                            </div>
+                            <p class="help-text">Apenas correspondencias acima deste valor serao mostradas</p>
                         </div>
 
                         <div class="upload-area" id="recognize-upload">
@@ -124,4 +161,5 @@
 
     <script src="app.js"></script>
 </body>
+
 </html>

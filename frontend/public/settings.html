@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configurações - Face Recognition System</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .settings-container {
+            max-width: 800px;
+            margin: 2rem auto;
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+        }
+
+        .settings-section {
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .settings-section:last-child {
+            border-bottom: none;
+        }
+
+        .model-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .model-card {
+            background: var(--bg-color);
+            padding: 1rem;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .model-card:hover {
+            border-color: var(--primary-color);
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked+.slider {
+            background-color: var(--secondary-color);
+        }
+
+        input:focus+.slider {
+            box-shadow: 0 0 1px var(--secondary-color);
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(26px);
+        }
+
+        .model-info {
+            flex: 1;
+        }
+
+        .model-name {
+            font-weight: 600;
+            display: block;
+        }
+
+        .model-desc {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Configurações do Sistema</h1>
+            <a href="index.html" class="btn btn-secondary"
+                style="display: inline-block; width: auto; margin-top: 10px;">Voltar ao Sistema</a>
+        </header>
+
+        <main class="settings-container">
+            <form id="settings-form">
+                <!-- Enabled Models -->
+                <div class="settings-section">
+                    <h2>Modelos Habilitados</h2>
+                    <p class="help-text">Selecione quais modelos devem aparecer na interface principal.</p>
+                    <div id="models-list" class="model-list">
+                        <p class="loading-text">Carregando modelos...</p>
+                    </div>
+                </div>
+
+                <!-- Detection Settings -->
+                <div class="settings-section">
+                    <h2>Configurações de Detecção</h2>
+
+                    <div class="form-group">
+                        <label for="det-backend">Backend de Detecção</label>
+                        <select id="det-backend" class="form-select">
+                            <option value="retinaface">RetinaFace (Alta precisão, Lento)</option>
+                            <option value="mtcnn">MTCNN (Equilibrado)</option>
+                            <option value="opencv">OpenCV / Haarcascade (Rápido, Menos preciso)</option>
+                            <option value="ssd">SSD (Rápido)</option>
+                            <option value="dlib">Dlib (HOG/CNN)</option>
+                            <option value="mediapipe">MediaPipe (Google)</option>
+                        </select>
+                        <p class="help-text">Algoritmo usado para encontrar faces na imagem.</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Limiar de Detecção: <span id="det-threshold-val">0.9</span></label>
+                        <input type="range" id="det-score-threshold" min="0.1" max="0.99" step="0.01"
+                            style="width: 100%">
+                    </div>
+                </div>
+
+                <!-- Recognition Settings -->
+                <div class="settings-section">
+                    <h2>Configurações Padrão</h2>
+
+                    <div class="form-group">
+                        <label>Limiar de Match Padrão: <span id="def-threshold-val">0.4</span></label>
+                        <input type="range" id="default-threshold" min="0.1" max="0.9" step="0.05" style="width: 100%">
+                        <p class="help-text">Distância cosseno (menor = mais estrito).</p>
+                    </div>
+                </div>
+
+                <div class="actions" style="text-align: right;">
+                    <button type="submit" class="btn btn-primary" id="save-btn" style="width: auto;">
+                        <span class="btn-text">Salvar Alterações</span>
+                        <span class="btn-loading" hidden>Salvando...</span>
+                    </button>
+                    <p id="save-message" class="result-message" style="margin-top: 10px;"></p>
+                </div>
+            </form>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        // Load configurations
+        async function loadConfig() {
+            try {
+                const [modelsRes, settingsRes] = await Promise.all([
+                    fetch(`${API_BASE}/models?all_models=true`),
+                    fetch(`${API_BASE}/settings`)
+                ]);
+
+                const models = await modelsRes.json();
+                const settings = await settingsRes.json();
+
+                renderModels(models, settings.enabled_models);
+                fillSettings(settings);
+
+            } catch (e) {
+                console.error("Error loading config:", e);
+                alert("Erro ao carregar configurações.");
+            }
+        }
+
+        function renderModels(models, enabledList) {
+            const container = document.getElementById('models-list');
+            const enabledSet = new Set(enabledList);
+
+            container.innerHTML = models.map(m => `
+                <label class="model-card">
+                    <div class="switch">
+                        <input type="checkbox" name="enabled_models" value="${m.name}" 
+                               ${enabledSet.has(m.name) ? 'checked' : ''}>
+                        <span class="slider"></span>
+                    </div>
+                    <div class="model-info">
+                        <span class="model-name">${m.display_name}</span>
+                        <span class="model-desc">${m.embedding_size}d • ${m.available ? 'Disponível' : 'Indisponível'}</span>
+                    </div>
+                </label>
+            `).join('');
+        }
+
+        function fillSettings(settings) {
+            document.getElementById('det-backend').value = settings.det_backend;
+
+            const detThresh = document.getElementById('det-score-threshold');
+            detThresh.value = settings.det_score_threshold;
+            document.getElementById('det-threshold-val').textContent = settings.det_score_threshold;
+
+            const defThresh = document.getElementById('default-threshold');
+            defThresh.value = settings.default_threshold;
+            document.getElementById('def-threshold-val').textContent = settings.default_threshold;
+        }
+
+        // Listeners for sliders
+        document.getElementById('det-score-threshold').addEventListener('input', e => {
+            document.getElementById('det-threshold-val').textContent = e.target.value;
+        });
+
+        document.getElementById('default-threshold').addEventListener('input', e => {
+            document.getElementById('def-threshold-val').textContent = e.target.value;
+        });
+
+        // Save
+        document.getElementById('settings-form').addEventListener('submit', async e => {
+            e.preventDefault();
+            const btn = document.getElementById('save-btn');
+            const msg = document.getElementById('save-message');
+
+            btn.disabled = true;
+            btn.querySelector('.btn-text').hidden = true;
+            btn.querySelector('.btn-loading').hidden = false;
+            msg.style.display = 'none';
+
+            // Collect data
+            const enabledModels = Array.from(document.querySelectorAll('input[name="enabled_models"]:checked'))
+                .map(cb => cb.value);
+
+            const payload = {
+                enabled_models: enabledModels,
+                det_backend: document.getElementById('det-backend').value,
+                det_score_threshold: parseFloat(document.getElementById('det-score-threshold').value),
+                default_threshold: parseFloat(document.getElementById('default-threshold').value)
+            };
+
+            try {
+                const res = await fetch(`${API_BASE}/settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    msg.textContent = "Configurações salvas com sucesso!";
+                    msg.className = "result-message success";
+                    msg.style.display = 'block';
+                } else {
+                    throw new Error("Failed to save");
+                }
+            } catch (err) {
+                console.error(err);
+                msg.textContent = "Erro ao salvar configurações.";
+                msg.className = "result-message error";
+                msg.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.querySelector('.btn-text').hidden = false;
+                btn.querySelector('.btn-loading').hidden = true;
+            }
+        });
+
+        // Init
+        loadConfig();
+    </script>
+</body>
+
+</html>

@@ -10,6 +10,7 @@ from app.models.base import FaceRecognitionModel, FaceData
 from app.models.registry import ModelRegistry
 from app.config import DEFAULT_DETECTOR
 from app.services.upscaler import get_upscaler, MIN_FACE_SIZE
+from app.services.settings import get_settings_service
 
 
 class DeepFaceModelBase(FaceRecognitionModel):
@@ -18,7 +19,11 @@ class DeepFaceModelBase(FaceRecognitionModel):
     def __init__(self):
         self._model_loaded = False
         self._model_available = None  # None = not checked, True/False = checked
-        self._detector = DEFAULT_DETECTOR
+        
+    @property
+    def _detector(self) -> str:
+        """Get configured detector backend."""
+        return get_settings_service().get_settings().det_backend
 
     def _ensure_model_loaded(self):
         """Lazy load the model on first use."""
@@ -33,10 +38,12 @@ class DeepFaceModelBase(FaceRecognitionModel):
                 self._model_available = False
 
     def is_available(self) -> bool:
-        """Check if the model is available."""
-        if self._model_available is None:
-            self._ensure_model_loaded()
-        return self._model_available if self._model_available is not None else True
+        """Check if the model is available. Fast check without loading."""
+        if self._model_available is not None:
+            return self._model_available
+        # In this project environment (Docker), we assume registered models are available
+        # since we run a downloader script at build time.
+        return True
 
     @property
     def _model_name(self) -> str:

@@ -34,20 +34,62 @@ const recognizeModelsContainer = document.getElementById('recognize-models');
 const ensembleGroup = document.getElementById('ensemble-group');
 const ensembleMethod = document.getElementById('ensemble-method');
 const nameGroup = document.getElementById('name-group');
+const confidenceThreshold = document.getElementById('confidence-threshold');
+const confidenceValue = document.getElementById('confidence-value');
+const votingOptions = document.getElementById('voting-options');
+const minVotesInput = document.getElementById('min-votes');
+const votingConfidenceInput = document.getElementById('voting-confidence');
+const votingConfidenceValue = document.getElementById('voting-confidence-value');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     setupUploadArea(registerUpload, registerFile, registerPreview, registerZipInfo, registerZipName);
     setupUploadArea(recognizeUpload, recognizeFile, recognizePreview, recognizeZipInfo, recognizeZipName, recognizePreviewWrapper, recognizeCanvas);
+    loadSettings();
     loadModels();
     loadFaces();
+
+    // Update confidence value display
+    if (confidenceThreshold && confidenceValue) {
+        confidenceThreshold.addEventListener('input', (e) => {
+            confidenceValue.textContent = `${e.target.value}%`;
+        });
+    }
+
+    if (votingConfidenceInput && votingConfidenceValue) {
+        votingConfidenceInput.addEventListener('input', (e) => {
+            votingConfidenceValue.textContent = `${e.target.value}%`;
+        });
+    }
+
+    if (ensembleMethod) {
+        ensembleMethod.addEventListener('change', updateEnsembleVisibility);
+    }
 });
+
+async function loadSettings() {
+    try {
+        const res = await fetch(`${API_BASE}/settings`);
+        if (res.ok) {
+            const settings = await res.json();
+            if (settings.default_threshold) {
+                // Settings uses distance threshold (0.1 - 0.9)
+                // Slider uses confidence (10 - 90%)
+                const confidence = Math.round((1 - settings.default_threshold) * 100);
+                confidenceThreshold.value = confidence;
+                confidenceValue.textContent = `${confidence}%`;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load settings", e);
+    }
+}
 
 // Check if file is a ZIP
 function isZipFile(file) {
     return file.name.toLowerCase().endsWith('.zip') ||
-           file.type === 'application/zip' ||
-           file.type === 'application/x-zip-compressed';
+        file.type === 'application/zip' ||
+        file.type === 'application/x-zip-compressed';
 }
 
 // Load available models
@@ -108,6 +150,18 @@ function renderModelSelectors() {
 function updateEnsembleVisibility() {
     const selected = document.querySelectorAll('input[name="recognize-models"]:checked');
     ensembleGroup.hidden = selected.length <= 1;
+
+    // Show/hide voting options
+    if (ensembleMethod.value === 'voting' && !ensembleGroup.hidden) {
+        votingOptions.hidden = false;
+        // Update default min votes based on selected models
+        // ensure default is majority but at least 2
+        const majority = Math.floor(selected.length / 2) + 1;
+        minVotesInput.placeholder = majority;
+        if (!minVotesInput.value) minVotesInput.value = majority;
+    } else {
+        votingOptions.hidden = true;
+    }
 }
 
 // Get selected models from a container
@@ -233,16 +287,16 @@ function drawFaceBboxes(faces) {
     const render = () => {
         // Use natural image resolution as canvas coordinate space —
         // CSS scales the canvas visually to match the displayed image size.
-        canvas.width  = img.naturalWidth;
+        canvas.width = img.naturalWidth;
         canvas.height = img.naturalHeight;
 
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         // Scale line widths / fonts relative to image size
-        const lineW    = Math.max(3, canvas.width / 180);
+        const lineW = Math.max(3, canvas.width / 180);
         const fontSize = Math.max(18, Math.round(canvas.width / 32));
-        const pad      = Math.round(fontSize * 0.35);
+        const pad = Math.round(fontSize * 0.35);
 
         faces.forEach((face, idx) => {
             if (!face.bbox) return;
@@ -253,9 +307,9 @@ function drawFaceBboxes(faces) {
             // ── bounding box ──
             ctx.save();
             ctx.strokeStyle = color;
-            ctx.lineWidth   = lineW;
+            ctx.lineWidth = lineW;
             ctx.shadowColor = 'rgba(0,0,0,0.6)';
-            ctx.shadowBlur  = lineW * 2;
+            ctx.shadowBlur = lineW * 2;
             ctx.strokeRect(x, y, w, h);
             ctx.restore();
 
@@ -263,14 +317,14 @@ function drawFaceBboxes(faces) {
             let label = 'Desconhecido';
             if (face.matches && face.matches.length > 0) {
                 const best = face.matches[0];
-                const pct  = Math.round(best.confidence * 100);
+                const pct = Math.round(best.confidence * 100);
                 label = `${best.name}  ${pct}%`;
             }
 
             ctx.font = `bold ${fontSize}px sans-serif`;
-            const textW  = ctx.measureText(label).width;
-            const boxW   = textW + pad * 2;
-            const boxH   = fontSize + pad * 1.6;
+            const textW = ctx.measureText(label).width;
+            const boxW = textW + pad * 2;
+            const boxH = fontSize + pad * 1.6;
 
             // Place label above the box; if no room above, place below
             const labelTop = y - boxH - lineW >= 0
@@ -281,7 +335,7 @@ function drawFaceBboxes(faces) {
             ctx.save();
             ctx.fillStyle = color;
             ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur  = 6;
+            ctx.shadowBlur = 6;
             ctx.beginPath();
             const r = boxH / 3;
             ctx.roundRect(x, labelTop, boxW, boxH, r);
@@ -291,7 +345,7 @@ function drawFaceBboxes(faces) {
             // Text
             ctx.save();
             ctx.fillStyle = contrastColor(color);
-            ctx.font      = `bold ${fontSize}px sans-serif`;
+            ctx.font = `bold ${fontSize}px sans-serif`;
             ctx.fillText(label, x + pad, labelTop + fontSize + pad * 0.4);
             ctx.restore();
         });
@@ -459,9 +513,9 @@ function displayBulkRegisterResults(data) {
         html += '<div class="bulk-items">';
         data.results.forEach(result => {
             const statusClass = result.images_failed === 0 ? 'success' :
-                               (result.images_success === 0 ? 'error' : 'partial');
+                (result.images_success === 0 ? 'error' : 'partial');
             const statusText = result.images_failed === 0 ? 'OK' :
-                              (result.images_success === 0 ? 'Falha' : 'Parcial');
+                (result.images_success === 0 ? 'Falha' : 'Parcial');
 
             html += `
                 <div class="bulk-item">
@@ -519,6 +573,21 @@ async function recognizeSingleImage(file, selectedModels, ensembleMethodValue) {
     formData.append('models', selectedModels.join(','));
     formData.append('ensemble_method', ensembleMethodValue);
 
+    // Add threshold (convert confidence % to distance threshold)
+    const confidencePercent = parseInt(confidenceThreshold.value);
+    const threshold = 1 - (confidencePercent / 100);
+    formData.append('threshold', threshold);
+
+    if (ensembleMethodValue === 'voting') {
+        if (minVotesInput.value) {
+            formData.append('min_votes', minVotesInput.value);
+        }
+        if (votingConfidenceInput.value) {
+            const voteConf = parseInt(votingConfidenceInput.value) / 100;
+            formData.append('min_vote_confidence', voteConf);
+        }
+    }
+
     try {
         const response = await fetch(`${API_BASE}/faces/recognize`, {
             method: 'POST',
@@ -562,6 +631,21 @@ async function recognizeFromZip(file, selectedModels, ensembleMethodValue) {
     formData.append('zipfile_upload', file);
     formData.append('models', selectedModels.join(','));
     formData.append('ensemble_method', ensembleMethodValue);
+
+    // Add threshold (convert confidence % to distance threshold)
+    const confidencePercent = parseInt(confidenceThreshold.value);
+    const threshold = 1 - (confidencePercent / 100);
+    formData.append('threshold', threshold);
+
+    if (ensembleMethodValue === 'voting') {
+        if (minVotesInput.value) {
+            formData.append('min_votes', minVotesInput.value);
+        }
+        if (votingConfidenceInput.value) {
+            const voteConf = parseInt(votingConfidenceInput.value) / 100;
+            formData.append('min_vote_confidence', voteConf);
+        }
+    }
 
     try {
         const response = await fetch(`${API_BASE}/faces/recognize-zip`, {

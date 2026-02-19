@@ -5,15 +5,19 @@ import shutil
 from typing import List, Optional
 from pathlib import Path
 
+import cv2
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import FACES_PATH, DISTANCE_THRESHOLD
+from app.storage.face_db import FaceDatabase, get_face_db
 from app.models import ModelRegistry
 from app.services.ensemble import EnsembleService, EnsembleMethod, create_ensemble
-from app.storage.face_db import get_face_db
+from app.services.settings import get_settings_service, AppSettings
+from app.services.image_processing import ImagePreprocessor
 
 # Supported image extensions
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
@@ -120,6 +124,7 @@ class ModelInfo(BaseModel):
     description: str
     embedding_size: int
     available: bool = True
+    enabled: bool = True  # New field for UI config
 
 
 class FaceResponse(BaseModel):
@@ -220,9 +225,40 @@ async def health_check():
 
 # List available models
 @app.get("/api/models", response_model=List[ModelInfo])
-async def list_models():
+async def list_models(all_models: bool = Query(False)):
+    """
+    List models.
+    If all_models is True, returns all registered models.
+    If False (default), returns only enabled models from settings.
+    """
+    settings = get_settings_service().get_settings()
+    enabled_set = set(settings.enabled_models)
+    
     models = ModelRegistry.get_all()
-    return [model.to_dict() for model in models]
+    result = []
+    
+    for model in models:
+        info = model.to_dict()
+        info["enabled"] = info["name"] in enabled_set
+        
+        # If we only want enabled models (for the main UI), skip disabled ones
+        # But for settings page (all_models=True), show everything
+        if all_models or info["enabled"]:
+            result.append(info)
+            
+    return result
+
+
+# Get settings
+@app.get("/api/settings", response_model=AppSettings)
+async def get_settings():
+    return get_settings_service().get_settings()
+
+
+# Update settings
+@app.post("/api/settings", response_model=AppSettings)
+async def update_settings(settings: AppSettings):
+    return get_settings_service().update_settings(settings.dict())
 
 
 # List ensemble methods
@@ -325,6 +361,8 @@ async def recognize_face(
     models: str = Form(""),  # Comma-separated model names; empty = all available
     ensemble_method: str = Form("average"),  # Ensemble method
     threshold: float = Form(DISTANCE_THRESHOLD),
+    min_votes: Optional[int] = Form(None),
+    min_vote_confidence: Optional[float] = Form(None),
 ):
     # Validate file type
     if not image.content_type.startswith("image/"):
@@ -342,96 +380,178 @@ async def recognize_face(
         tmp_path = tmp.name
 
     try:
-        # Get ALL face embeddings from the primary model
+        # Define strategies: None = Original
+        strategies = [None, "upscale", "clahe", "sharpen", "norm"]
+        best_response = None
+        best_match_score = -1.0 # Higher is better (confidence)
+        processed_files = [] # Track for cleanup
+
+        matches_found = False
+        
+        # Primary Model (first one selected)
         primary_model = ModelRegistry.get(valid_models[0])
-        all_faces = primary_model.get_all_embeddings(tmp_path)
 
-        if not all_faces:
-            return RecognitionResponse(
-                success=False,
-                matches=[],
-                message="No face detected in image",
-                models_used=[],
-                ensemble_method=None,
-                faces_detected=0,
-                faces=[]
-            )
+        for strategy in strategies:
+            # Prepare image path
+            current_path = tmp_path
+            
+            if strategy:
+                # Apply preprocessing
+                if strategy == "upscale":
+                    new_path = ImagePreprocessor.apply_upscaling(tmp_path)
+                elif strategy == "clahe":
+                    new_path = ImagePreprocessor.apply_clahe(tmp_path)
+                elif strategy == "sharpen":
+                    new_path = ImagePreprocessor.apply_sharpening(tmp_path)
+                elif strategy == "norm":
+                    new_path = ImagePreprocessor.apply_brightness_normalization(tmp_path)
+                
+                if new_path:
+                    current_path = new_path
+                    processed_files.append(new_path)
+                else:
+                    continue # Skip if processing failed
 
-        db = get_face_db()
-        face_detections = []
-        all_matches = []
+            print(f"Trying recognition with strategy: {strategy or 'original'}")
+            
+            # --- Detection & Recognition Logic (Reused) ---
+            try:
+                # Detect faces
+                all_faces = primary_model.get_all_embeddings(current_path)
 
-        # Process each detected face
-        for face_data in all_faces:
-            # Get embeddings from all models for this face
-            # For multi-model, we need the specific face region
-            # For simplicity, we use the primary model's embedding
-            embeddings = {valid_models[0]: face_data.embedding}
+                if not all_faces:
+                    continue # Try next strategy
 
-            # If multiple models, get embeddings from each
-            # Note: This uses the largest face for other models
-            # A more sophisticated approach would crop the face and re-detect
-            if len(valid_models) > 1:
-                for model_name in valid_models[1:]:
-                    model = ModelRegistry.get(model_name)
-                    if model:
-                        # Use get_all_embeddings to try to match face by index
-                        model_faces = model.get_all_embeddings(tmp_path)
-                        if model_faces and len(model_faces) > face_data.face_index:
-                            embeddings[model_name] = model_faces[face_data.face_index].embedding
-                        elif model_faces:
-                            # Fallback to first face
-                            embeddings[model_name] = model_faces[0].embedding
+                # Process matches
+                db = get_face_db()
+                face_detections = []
+                all_matches = []
+                
+                # Setup models for this pass
+                # Note: We re-extract embeddings for all models using current_path
+                
+                for face_data in all_faces:
+                    # Collect embeddings
+                    embeddings = {valid_models[0]: face_data.embedding}
+                    
+                    if len(valid_models) > 1:
+                        for model_name in valid_models[1:]:
+                            model = ModelRegistry.get(model_name)
+                            if model:
+                                model_faces = model.get_all_embeddings(current_path)
+                                # Naive matching by index/size - ideally need IoU matching
+                                # Simplification: take largest/corresponding index
+                                if model_faces and len(model_faces) > face_data.face_index:
+                                    embeddings[model_name] = model_faces[face_data.face_index].embedding
+                                elif model_faces:
+                                    embeddings[model_name] = model_faces[0].embedding
+                    
+                    # Compute Matches
+                    if len(embeddings) == 1:
+                        model_name = list(embeddings.keys())[0]
+                        model = ModelRegistry.get(model_name)
+                        matches = db.find_matches_single_model(
+                            embeddings[model_name],
+                            model_name,
+                            model.compare,
+                            threshold
+                        )
+                        used_ensemble = None
+                    else:
+                        ensemble = create_ensemble(
+                            list(embeddings.keys()),
+                            ensemble_method,
+                            min_votes=min_votes,
+                            vote_threshold=1-min_vote_confidence if min_vote_confidence is not None else None
+                        )
+                        matches = db.find_matches(
+                            embeddings,
+                            ensemble.compare_embeddings,
+                            threshold,
+                            list(embeddings.keys())
+                        )
+                        used_ensemble = ensemble_method
 
-            # Create ensemble for comparison
-            used_ensemble = None
-            if len(embeddings) == 1:
-                model_name = list(embeddings.keys())[0]
-                model = ModelRegistry.get(model_name)
-                matches = db.find_matches_single_model(
-                    embeddings[model_name],
-                    model_name,
-                    model.compare,
-                    threshold
+                    face_detection = FaceDetection(
+                        face_index=face_data.face_index,
+                        bbox=list(face_data.bbox) if face_data.bbox else None,
+                        matches=[MatchResponse(**m) for m in matches] if matches else []
+                    )
+                    face_detections.append(face_detection)
+                    all_matches.extend(matches if matches else [])
+
+                # Evaluate this strategy's success
+                current_match_count = len(all_matches)
+                current_max_conf = max([m.confidence for m in all_matches]) if all_matches else 0.0
+
+                # Create response object
+                total_matches = sum(len(f.matches) for f in face_detections)
+                response = RecognitionResponse(
+                    success=True,
+                    matches=[MatchResponse(**m) for m in all_matches] if all_matches else [],
+                    message=f"Found {len(all_faces)} face(s), {total_matches} match(es) ({strategy or 'original'})",
+                    models_used=valid_models,
+                    ensemble_method=used_ensemble if len(valid_models) > 1 else None,
+                    faces_detected=len(all_faces),
+                    faces=face_detections
                 )
-            else:
-                ensemble = create_ensemble(list(embeddings.keys()), ensemble_method)
-                matches = db.find_matches(
-                    embeddings,
-                    ensemble.compare_embeddings,
-                    threshold,
-                    list(embeddings.keys())
-                )
-                used_ensemble = ensemble_method
 
-            face_detection = FaceDetection(
-                face_index=face_data.face_index,
-                bbox=list(face_data.bbox) if face_data.bbox else None,
-                matches=[MatchResponse(**m) for m in matches] if matches else []
-            )
-            face_detections.append(face_detection)
-            all_matches.extend(matches if matches else [])
+                # HEURISTIC: Is this better than what we have?
+                # 1. More matches is usually better? Or higher confidence?
+                # Let's prioritize max confidence of top match
+                
+                is_better = False
+                if best_response is None:
+                    is_better = True
+                elif current_max_conf > best_match_score:
+                    # Significant improvement
+                    is_better = True
+                elif current_max_conf == best_match_score and current_match_count > len(best_response.matches):
+                    # Same confidence, more matches
+                    is_better = True
+                
+                if is_better:
+                    best_response = response
+                    best_match_score = current_max_conf
+                    
+                # Early Exit: If we found a very strong match (>85% confidence), stop trying
+                # But allow at least trying 'original' and maybe 'upscale' if original failed
+                if current_max_conf > 0.75: # High confidence
+                     matches_found = True
+                     break
 
-        # For backward compatibility, include all matches in flat list
-        total_matches = sum(len(f.matches) for f in face_detections)
+            except Exception as e:
+                print(f"Strategy {strategy} failed: {e}")
+                continue
 
+        # End of strategy loop
+        
+        # Cleanup processed files
+        ImagePreprocessor.cleanup(processed_files)
+        
+        if best_response:
+            return best_response
+            
+        # If absolutely nothing worked (no detection in any strategy)
         return RecognitionResponse(
-            success=True,
-            matches=[MatchResponse(**m) for m in all_matches] if all_matches else [],
-            message=f"Found {len(all_faces)} face(s), {total_matches} match(es)",
-            models_used=valid_models,
-            ensemble_method=used_ensemble if len(valid_models) > 1 else None,
-            faces_detected=len(all_faces),
-            faces=face_detections
+            success=False,
+            matches=[],
+            message="No face detected in image (tried comprehensive enhancement)",
+            models_used=[],
+            ensemble_method=None,
+            faces_detected=0,
+            faces=[]
         )
+
     finally:
-        # Clean up temp file
-        os.unlink(tmp_path)
+        # Clean up original temp file
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 # Register faces from ZIP file
 @app.post("/api/faces/register-zip", response_model=BulkRegisterResponse)
-async def register_faces_from_zip(
+def register_faces_from_zip(
     zipfile_upload: UploadFile = File(...),
     models: str = Form(""),  # Empty = all available models
 ):
@@ -466,7 +586,7 @@ async def register_faces_from_zip(
 
     try:
         # Save and extract ZIP
-        content = await zipfile_upload.read()
+        content = zipfile_upload.file.read()
         with open(zip_path, 'wb') as f:
             f.write(content)
 
@@ -550,11 +670,13 @@ async def register_faces_from_zip(
 
 # Recognize faces from ZIP file
 @app.post("/api/faces/recognize-zip", response_model=BulkRecognizeResponse)
-async def recognize_faces_from_zip(
+def recognize_faces_from_zip(
     zipfile_upload: UploadFile = File(...),
     models: str = Form(""),  # Empty = all available
     ensemble_method: str = Form("average"),
     threshold: float = Form(DISTANCE_THRESHOLD),
+    min_votes: Optional[int] = Form(None),
+    min_vote_confidence: Optional[float] = Form(None),
 ):
     """
     Recognize faces from a ZIP file containing images.
@@ -573,7 +695,7 @@ async def recognize_faces_from_zip(
 
     try:
         # Save uploaded ZIP
-        content = await zipfile_upload.read()
+        content = zipfile_upload.file.read()
         with open(zip_path, 'wb') as f:
             f.write(content)
 
@@ -595,7 +717,14 @@ async def recognize_faces_from_zip(
             raise HTTPException(status_code=400, detail="No images found in ZIP")
 
         # Create ensemble if multiple models
-        ensemble = create_ensemble(valid_models, ensemble_method) if len(valid_models) > 1 else None
+        ensemble = None
+        if len(valid_models) > 1:
+            ensemble = create_ensemble(
+                valid_models,
+                ensemble_method,
+                min_votes=min_votes,
+                vote_threshold=1-min_vote_confidence if min_vote_confidence is not None else None
+            )
         db = get_face_db()
         results = []
         processed = 0

@@ -44,16 +44,23 @@ MODEL_WEIGHTS = {
 class EnsembleService:
     """Service for ensemble face recognition."""
 
-    def __init__(self, model_names: List[str], method: EnsembleMethod = EnsembleMethod.AVERAGE):
+    def __init__(
+        self,
+        model_names: List[str],
+        method: EnsembleMethod = EnsembleMethod.AVERAGE,
+        options: Optional[Dict[str, Any]] = None
+    ):
         """
         Initialize ensemble with specified models.
 
         Args:
             model_names: List of model names to use
             method: Ensemble method for combining predictions
+            options: Additional options (e.g. min_votes, vote_threshold)
         """
         self.models: List[FaceRecognitionModel] = []
         self.method = method
+        self.options = options or {}
 
         for name in model_names:
             model = ModelRegistry.get(name)
@@ -132,14 +139,23 @@ class EnsembleService:
             return float(np.max(distances))
 
         elif self.method == EnsembleMethod.VOTING:
-            # Count how many models agree it's a match (distance < 0.5)
-            threshold = 0.5
-            votes = sum(1 for d in distances if d < threshold)
-            # If majority says match, use average of matching distances
-            if votes > len(distances) / 2:
-                matching = [d for d in distances if d < threshold]
+            # Get voting options
+            # Default threshold 0.5 (approx 50% match)
+            # Default min_votes is majority (> 50%)
+            vote_threshold = self.options.get("vote_threshold", 0.5)
+            min_votes = self.options.get("min_votes", int(len(distances) / 2) + 1)
+            
+            # Count how many models agree it's a match (distance < threshold)
+            votes = sum(1 for d in distances if d < vote_threshold)
+            
+            # If we have enough votes, return the average of the matching distances
+            # This ensures the result is a "match" (low distance)
+            if votes >= min_votes:
+                matching = [d for d in distances if d < vote_threshold]
                 return float(np.mean(matching))
             else:
+                # If not enough votes, return a high distance (average of non-matching or just 1.0)
+                # To be less harsh, we return the average of ALL distances, which will likely be high
                 return float(np.mean(distances))
 
         return float(np.mean(distances))
@@ -147,7 +163,8 @@ class EnsembleService:
 
 def create_ensemble(
     model_names: List[str],
-    method: str = "average"
+    method: str = "average",
+    **kwargs
 ) -> EnsembleService:
     """
     Factory function to create an ensemble.
@@ -155,10 +172,11 @@ def create_ensemble(
     Args:
         model_names: List of model names
         method: Ensemble method name
+        **kwargs: Additional options (e.g. min_votes, vote_threshold)
     """
     try:
         ensemble_method = EnsembleMethod(method)
     except ValueError:
         ensemble_method = EnsembleMethod.AVERAGE
 
-    return EnsembleService(model_names, ensemble_method)
+    return EnsembleService(model_names, ensemble_method, options=kwargs)
